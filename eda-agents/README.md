@@ -84,7 +84,7 @@ flowchart TD
 | 6 | **ML Strategist** | Recomienda modelos, hiperparámetros, técnica de búsqueda, métrica principal, define model_family (linear/tree) |
 | — | **Re-Encoder** | Nodo Python puro: re-aplica encoding final según model_family (linear→Frequency, tree→Label) |
 | 7 | **Viz Designer** | Genera 11+ figuras interactivas Plotly: correlaciones, distribuciones multi-fila, boxplots, pairplot, target, VIF (barras color-código), Q-Q normalidad, residuales Breusch-Pagan |
-| 8 | **Technical Writer** | Produce informe `report.md`, reporte HTML dinámico con navegación lateral y tema claro/oscuro, y notebook Jupyter reproducible |
+| 8 | **Technical Writer** | Produce informe `report.md`, reporte HTML dinámico con navegación lateral y tema claro/oscuro, y notebook Jupyter con código 100% ejecutable |
 
 ## Stack Tecnologico
 
@@ -272,18 +272,23 @@ Se genera automáticamente una página HTML auto-contenida en `reportesFinales/`
 - Botones de descarga (CSV, JSON, notebook)
 - Modal para zoom de imágenes
 
-### Notebook Reproducible
+### Notebook Reproducible (Código Ejecutable)
 
-Se genera automáticamente un notebook Jupyter en `notebooksFinales/` con:
-- Carga de datos y configuración
-- Perfil de datos (nulos, cardinalidad, tipos)
-- Preprocesamiento y encoding aplicado
-- Visualizaciones (correlaciones, distribuciones, boxplots, pairplot)
-- Gráfico de barras VIF con umbrales color-código
-- Q-Q plots de normalidad por variable
-- Test de Breusch-Pagan y gráfico de residuales
-- Hallazgos estadísticos del pipeline
-- Decisión de modelos y ejemplo de entrenamiento
+Se genera automáticamente un notebook Jupyter en `notebooksFinales/` con **código 100% ejecutable** — nada precalculado. Cada celda computa resultados en vivo desde el CSV original, tal como lo haría un científico de datos:
+
+| Sección | Qué computa en vivo |
+|---------|--------------------|
+| **1. Setup** | Importaciones (pandas, scipy, statsmodels, sklearn, plotly) |
+| **2. Carga y Perfil** | `df.info()`, `df.describe()`, análisis de nulos y cardinalidad |
+| **3. Hipótesis** | Formuladas por el Research Lead |
+| **4. Train/Test Split** | `train_test_split()` con el mismo seed del pipeline |
+| **5. Encoding** | `pd.get_dummies()` (OHE), `.map()` (Label), `.value_counts()` (Frequency) paso a paso |
+| **6. EDA Visual** | Correlaciones Spearman, histogramas, boxplots con IQR, scatter matrix (Plotly) |
+| **7. Tests Estadísticos** | `scipy.stats.shapiro()`, `variance_inflation_factor()`, `het_breuschpagan()`, Q-Q plots |
+| **8. Feature Importance** | `mutual_info_regression/classif()`, `permutation_importance()` con RandomForest |
+| **9. Modelado** | `GridSearchCV` con el modelo recomendado, evaluación en test |
+
+Del state del pipeline solo se usa **configuración** (dataset_path, target, seed, encoding recipe, modelos recomendados) — los resultados se computan desde cero para que el investigador pueda verificar cada paso.
 
 ### Ejemplo de `decision.json`
 
@@ -324,7 +329,7 @@ eda-agents/
       encoding.py            # OHE, Label, Ordinal, Frequency encoding
       report_builder.py      # Generacion del informe markdown
       html_report.py         # Generacion de pagina HTML dinamica
-      notebook_builder.py    # Generacion de notebook Jupyter
+      notebook_builder.py    # Notebook Jupyter con código ejecutable (sin resultados precalculados)
       statistical_tests.py   # Breusch-Pagan, VIF, correlaciones
       timeseries.py          # ADF, KPSS, deteccion de cambios
     utils/
@@ -360,7 +365,7 @@ pytest tests/ --cov=src --cov-report=term-missing
 pytest tests/test_agents.py -v
 ```
 
-**195 tests** cubren agentes, skills, grafo, estado, validación, HTML report, notebook builder, sanitización numpy y pipeline end-to-end.
+**194 tests** cubren agentes, skills, grafo, estado, validación, HTML report, notebook builder (código ejecutable), sanitización numpy y pipeline end-to-end.
 
 ## Convenciones del Proyecto
 
