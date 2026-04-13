@@ -525,94 +525,487 @@ def build_notebook(state: dict[str, Any], output_dir: str | Path) -> Path:
                 f"    fig.show()"
             ))
 
-    # ======================== 7. HALLAZGOS ========================
-    cells.append(_cell_markdown("## 7. Hallazgos del Pipeline"))
+    # ======================== 7. METODOLOGIA PASO A PASO ========================
+    cells.append(_cell_markdown(
+        "## 7. Metodología Analítica — Paso a Paso\n"
+        "\n"
+        "Esta sección documenta el proceso analítico completo seguido por el pipeline,\n"
+        "desde la formulación de hipótesis hasta la selección de modelos.\n"
+        "Cada paso incluye las decisiones tomadas y su justificación."
+    ))
 
-    # Interpretación
+    # --- 7.1 Research Lead ---
+    search_eqs = state.get("search_equations", [])
+    refs = state.get("refs", [])
+    cells.append(_cell_markdown(
+        "### 7.1 Investigación y Formulación de Hipótesis\n"
+        "\n"
+        "**Agente:** Research Lead\n\n"
+        "**Objetivo:** A partir de la pregunta de investigación, formular hipótesis "
+        "y buscar literatura relevante para contextualizar el análisis."
+    ))
+    cells.append(_cell_code(
+        f"# Ecuaciones de busqueda PICO usadas\n"
+        f"search_equations = {search_eqs!r}\n"
+        f"\n"
+        f"print('=== Ecuaciones de Búsqueda PICO ===')\n"
+        f"for i, eq in enumerate(search_equations, 1):\n"
+        f"    print(f'  {{i}}. {{eq}}')\n"
+        f"\n"
+        f"print(f'\\nTotal ecuaciones: {{len(search_equations)}}')\n"
+        f"print(f'Referencias encontradas: {len(refs)}')"
+    ))
+
+    if refs:
+        # Build refs summary (avoid dumping entire refs JSON)
+        refs_summary = []
+        for r in refs[:10]:  # max 10
+            if isinstance(r, dict):
+                refs_summary.append({
+                    "title": r.get("title", "N/A"),
+                    "source": r.get("source", "N/A"),
+                    "key_finding": r.get("key_finding", ""),
+                    "doi": r.get("doi", ""),
+                })
+        refs_json = json.dumps(refs_summary, indent=2, ensure_ascii=False, default=str)
+        cells.append(_cell_code(
+            f"# Referencias clave encontradas\n"
+            f"refs = json.loads('''{refs_json}''')\n"
+            f"\n"
+            f"print('=== Referencias Principales ===')\n"
+            f"for i, ref in enumerate(refs, 1):\n"
+            f"    print(f'\\n[{{i}}] {{ref[\"title\"]}}')\n"
+            f"    print(f'    Fuente: {{ref[\"source\"]}}')\n"
+            f"    if ref.get('key_finding'):\n"
+            f"        print(f'    Hallazgo clave: {{ref[\"key_finding\"]}}')\n"
+            f"    if ref.get('doi'):\n"
+            f"        print(f'    DOI: https://doi.org/{{ref[\"doi\"]}}')"
+        ))
+
+    cells.append(_cell_markdown(
+        f"**Hipótesis formuladas:**\n"
+        f"\n"
+        f"| Tipo | Hipótesis |\n"
+        f"|------|----------|\n"
+        f"| H1 (confirmatoria) | {hip.get('h1', 'N/A')} |\n"
+        f"| H2 (exploratoria) | {hip.get('h2', 'N/A')} |\n"
+        f"| H3 (alternativa) | {hip.get('h3', 'N/A')} |\n"
+        f"\n"
+        f"**Tarea inferida:** `{state.get('tarea_sugerida', 'N/A')}`"
+    ))
+
+    # --- 7.2 Data Steward ---
+    flag_ts = state.get("flag_timeseries", False)
+    n_cols = len(col_names)
+    n_null_cols = sum(1 for c, info in perfil.items()
+                      if isinstance(info, dict) and info.get("pct_nulos", 0) > 0)
+    imbalance = state.get("desbalance_ratio")
+    cells.append(_cell_markdown(
+        "### 7.2 Perfilado y Diagnóstico de Datos\n"
+        "\n"
+        "**Agente:** Data Steward\n\n"
+        "**Objetivo:** Examinar la estructura del dataset, detectar problemas de calidad "
+        "y preparar la estrategia de split."
+    ))
+    # Build perfil_data dict as string lines (avoid backslashes in f-strings for Python 3.10)
+    perfil_lines = []
+    for c, info in perfil.items():
+        if isinstance(info, dict):
+            dtype = info.get("dtype", "N/A")
+            nulos_pct = info.get("pct_nulos", 0)
+            card = info.get("cardinalidad", "N/A")
+            perfil_lines.append(
+                f"    {c!r}: {{'dtype': {dtype!r}, "
+                f"'nulos_pct': {nulos_pct}, "
+                f"'cardinalidad': {card!r}}},"
+            )
+    perfil_dict_str = "\n".join(perfil_lines)
+    ts_label = "Sí" if flag_ts else "No"
+    imbalance_label = str(imbalance) if imbalance else "N/A (regresión)"
+    cells.append(_cell_code(
+        f"# Resumen del perfilado automatico\n"
+        f"print('=== Diagnóstico de Datos ===')\n"
+        f"print(f'  Columnas totales: {n_cols}')\n"
+        f"print(f'  Columnas con nulos: {n_null_cols}')\n"
+        f"print(f'  Serie temporal detectada: {ts_label}')\n"
+        f"print(f'  Ratio de desbalance: {imbalance_label}')\n"
+        f"print()\n"
+        f"print('=== Tipos Detectados ===')\n"
+        "perfil_data = {\n" +
+        perfil_dict_str +
+        "\n}\n"
+        "for col, info in perfil_data.items():\n"
+        "    nul_str = f' ({info[\"nulos_pct\"]:.1f}% nulos)' if info['nulos_pct'] > 0 else ''\n"
+        "    print(f'  {col}: {info[\"dtype\"]} — card={info[\"cardinalidad\"]}{nul_str}')"
+    ))
+
+    # --- 7.3 Data Engineer ---
+    features_nuevas = state.get("features_nuevas", [])
+    balanceo_log = state.get("balanceo_log", {})
+    cells.append(_cell_markdown(
+        "### 7.3 Ingeniería de Datos y Encoding\n"
+        "\n"
+        "**Agente:** Data Engineer\n\n"
+        "**Objetivo:** Transformar variables categóricas en numéricas, crear features "
+        "derivadas y aplicar técnicas de balanceo si es necesario."
+    ))
+    enc_decisions = []
+    for col_name, info in encoding_log.items():
+        if isinstance(info, dict):
+            enc_type = info.get("encoding", "N/A")
+            flag = info.get("flag", "")
+            reason = ""
+            if "ohe" in enc_type.lower():
+                reason = "categorías ≤ umbral → One-Hot Encoding"
+            elif "label" in enc_type.lower():
+                reason = "categoría alta cardinalidad → Label Encoding"
+            elif "ordinal" in enc_type.lower():
+                reason = "variable ordinal explícita → Ordinal Encoding"
+            elif "freq" in enc_type.lower():
+                reason = "re-encoding para modelo lineal → Frequency Encoding"
+            enc_decisions.append(f"    {col_name!r}: {{'encoding': {enc_type!r}, 'flag': {flag!r}, 'razon': {reason!r}}},")
+
+    bal_json = json.dumps(balanceo_log, indent=2, ensure_ascii=False, default=str)
+    cells.append(_cell_code(
+        "# Decisiones de encoding (por qué se eligió cada técnica)\n"
+        "encoding_decisions = {\n" +
+        "\n".join(enc_decisions) +
+        "\n}\n"
+        "\n"
+        "print('=== Decisiones de Encoding ===')\n"
+        "for col, info in encoding_decisions.items():\n"
+        "    print(f'  {col}: {info[\"encoding\"]}')\n"
+        "    if info.get('razon'):\n"
+        "        print(f'    → Razón: {info[\"razon\"]}')\n"
+        "    new = info.get('new_cols', [])\n"
+        "    if new:\n"
+        "        print(f'    → Columnas generadas: {new}')"
+    ))
+    if features_nuevas:
+        cells.append(_cell_code(
+            f"# Features nuevas creadas\n"
+            f"features_nuevas = {features_nuevas!r}\n"
+            f"print('=== Features Derivadas ===')\n"
+            f"for f in features_nuevas:\n"
+            f"    print(f'  + {{f}}')\n"
+            f"print(f'Total features nuevas: {{len(features_nuevas)}}')"
+        ))
+    if balanceo_log:
+        cells.append(_cell_code(
+            f"# Balanceo aplicado\n"
+            f"balanceo = json.loads('''{bal_json}''')\n"
+            f"print('=== Técnica de Balanceo ===')\n"
+            f"tecnica = balanceo.get('tecnica', 'Ninguna')\n"
+            f"print(f'  Técnica: {{tecnica}}')\n"
+            f"if balanceo.get('ratio_antes'):\n"
+            f"    print(f'  Ratio antes: {{balanceo[\"ratio_antes\"]}}')\n"
+            f"if balanceo.get('ratio_despues'):\n"
+            f"    print(f'  Ratio después: {{balanceo[\"ratio_despues\"]}}')"
+        ))
+
+    # --- 7.4 Statistical Analysis Decisions ---
+    cells.append(_cell_markdown(
+        "### 7.4 Análisis Estadístico: Decisiones y Hallazgos\n"
+        "\n"
+        "**Agente:** Statistician\n\n"
+        "**Objetivo:** Identificar patrones, multicolinealidad, heteroscedasticidad "
+        "y distribuciones para informar la selección de modelos."
+    ))
+
+    # Correlations analysis
+    correlations = hallazgos.get("correlations", {})
+    spearman = correlations.get("spearman", {})
+    cells.append(_cell_code(
+        f"# Paso 1: Análisis de correlaciones\n"
+        f"hallazgos = json.loads('''{hallazgos_json}''')\n"
+        f"spearman = hallazgos.get('correlations', {{}}).get('spearman', {{}})\n"
+        f"\n"
+        f"# Identificar pares significativos\n"
+        f"pares_fuertes = []\n"
+        f"pares_moderados = []\n"
+        f"seen = set()\n"
+        f"for row_name, row_vals in spearman.items():\n"
+        f"    for col_name, val in row_vals.items():\n"
+        f"        if row_name == col_name:\n"
+        f"            continue\n"
+        f"        pair = tuple(sorted((row_name, col_name)))\n"
+        f"        if pair in seen:\n"
+        f"            continue\n"
+        f"        seen.add(pair)\n"
+        f"        if abs(val) > 0.7:\n"
+        f"            pares_fuertes.append((row_name, col_name, val))\n"
+        f"        elif abs(val) > 0.5:\n"
+        f"            pares_moderados.append((row_name, col_name, val))\n"
+        f"\n"
+        f"print('=== Análisis de Correlaciones (Spearman) ===')\n"
+        f"print(f'  Pares con correlación fuerte (|r| > 0.7): {{len(pares_fuertes)}}')\n"
+        f"for a, b, r in sorted(pares_fuertes, key=lambda x: abs(x[2]), reverse=True):\n"
+        f"    tipo = 'positiva' if r > 0 else 'negativa'\n"
+        f"    print(f'    {{a}} ↔ {{b}}: r={{r:.3f}} ({{tipo}})')\n"
+        f"\n"
+        f"print(f'\\n  Pares con correlación moderada (0.5 < |r| ≤ 0.7): {{len(pares_moderados)}}')\n"
+        f"for a, b, r in sorted(pares_moderados, key=lambda x: abs(x[2]), reverse=True):\n"
+        f"    tipo = 'positiva' if r > 0 else 'negativa'\n"
+        f"    print(f'    {{a}} ↔ {{b}}: r={{r:.3f}} ({{tipo}})')\n"
+        f"\n"
+        f"# Implicación metodológica\n"
+        f"if pares_fuertes:\n"
+        f"    print('\\n→ IMPLICACIÓN: Correlaciones fuertes sugieren posible multicolinealidad.')\n"
+        f"    print('  Esto motivó el cálculo de VIF en el siguiente paso.')"
+    ))
+
+    # Outliers analysis
+    outliers = hallazgos.get("outliers", {})
+    cells.append(_cell_code(
+        f"# Paso 2: Detección de outliers (IQR 1.5x)\n"
+        f"outliers = hallazgos.get('outliers', {{}})\n"
+        f"\n"
+        f"print('=== Detección de Outliers (IQR 1.5x) ===')\n"
+        f"vars_con_outliers = 0\n"
+        f"vars_criticas = []\n"
+        f"for col, info in outliers.items():\n"
+        f"    n_out = info.get('n_outliers', 0)\n"
+        f"    pct = info.get('pct', 0)\n"
+        f"    if n_out > 0:\n"
+        f"        vars_con_outliers += 1\n"
+        f"    if pct > 5:\n"
+        f"        vars_criticas.append((col, n_out, pct))\n"
+        f"    flag = ' ⚠ CRÍTICO' if pct > 5 else ' △' if pct > 1 else ''\n"
+        f"    print(f'  {{col}}: {{n_out}} outliers ({{pct:.1f}}%){{flag}}')\n"
+        f"\n"
+        f"print(f'\\nVariables con outliers: {{vars_con_outliers}}/{{len(outliers)}}')\n"
+        f"if vars_criticas:\n"
+        f"    print(f'Variables críticas (>5%): {{len(vars_criticas)}}')\n"
+        f"    print('→ IMPLICACIÓN: Considerar transformaciones robustas o winsorización.')\n"
+        f"else:\n"
+        f"    print('→ No se encontraron variables con outliers críticos.')"
+    ))
+
+    # VIF methodology
+    if vif_all:
+        cells.append(_cell_code(
+            f"# Paso 3: Multicolinealidad (VIF)\n"
+            f"vif_data = json.loads('''{vif_json}''')\n"
+            f"\n"
+            f"print('=== Factor de Inflación de Varianza (VIF) ===')\n"
+            f"n_high_vif = 0\n"
+            f"n_moderate_vif = 0\n"
+            f"for feat, vif_val in sorted(vif_data.items(), key=lambda x: x[1], reverse=True):\n"
+            f"    if vif_val > 10:\n"
+            f"        n_high_vif += 1\n"
+            f"        print(f'  ⚠ {{feat}}: VIF={{vif_val:.2f}} — MULTICOLINEALIDAD ALTA')\n"
+            f"    elif vif_val > 5:\n"
+            f"        n_moderate_vif += 1\n"
+            f"        print(f'  △ {{feat}}: VIF={{vif_val:.2f}} — moderada')\n"
+            f"    else:\n"
+            f"        print(f'  ✓ {{feat}}: VIF={{vif_val:.2f}}')\n"
+            f"\n"
+            f"print(f'\\nResumen: {{n_high_vif}} alta, {{n_moderate_vif}} moderada, {{len(vif_data) - n_high_vif - n_moderate_vif}} aceptable')\n"
+            f"if n_high_vif > 0:\n"
+            f"    print('→ DECISIÓN: VIF alto motivó el uso de regularización (Ridge/Lasso).')\n"
+            f"    print('  Esto influyó en la selección de modelo_family y modelos recomendados.')\n"
+            f"else:\n"
+            f"    print('→ Multicolinealidad no es un problema. OLS estándar es viable.')"
+        ))
+
+    # Normality methodology
+    if normality:
+        cells.append(_cell_code(
+            f"# Paso 4: Normalidad de variables\n"
+            f"normality_results = json.loads('''{norm_json}''')\n"
+            f"\n"
+            f"print('=== Test de Normalidad ===')\n"
+            f"n_normal = sum(1 for v in normality_results.values() if v.get('normal'))\n"
+            f"n_no_normal = len(normality_results) - n_normal\n"
+            f"for col, info in normality_results.items():\n"
+            f"    test = info.get('test', 'shapiro')\n"
+            f"    pval = info.get('p_value')\n"
+            f"    is_normal = info.get('normal', False)\n"
+            f"    symbol = '✓' if is_normal else '✗'\n"
+            f"    p_str = f'p={{pval:.4f}}' if pval is not None else ''\n"
+            f"    print(f'  {{symbol}} {{col}}: {{\"Normal\" if is_normal else \"No normal\"}} ({{test}}, {{p_str}})')\n"
+            f"\n"
+            f"print(f'\\nNormales: {{n_normal}} | No normales: {{n_no_normal}}')\n"
+            f"if n_no_normal > n_normal:\n"
+            f"    print('→ IMPLICACIÓN: Mayoría no normal → se prefirió Spearman sobre Pearson.')\n"
+            f"    print('  Modelos basados en árboles pueden ser más robustos aquí.')\n"
+            f"else:\n"
+            f"    print('→ IMPLICACIÓN: Variables mayormente normales. Tests paramétricos son válidos.')"
+        ))
+
+    # BP methodology
+    if bp_result and not bp_result.get("error"):
+        is_hetero = bp_result.get("heteroscedastic", False)
+        bp_pval = bp_result.get("bp_pvalue", 0)
+        correction = state.get("modelo_correccion_heterosc", "HC3")
+        bp_label = "Heteroscedástico" if is_hetero else "Homoscedástico"
+        cells.append(_cell_code(
+            f"# Paso 5: Heterocedasticidad (Breusch-Pagan)\n"
+            f"print('=== Test de Breusch-Pagan ===')\n"
+            f"print(f'  p-valor: {bp_pval:.4f}')\n"
+            f"print(f'  Resultado: {bp_label}')\n"
+            f"print()\n"
+            f"if {is_hetero}:\n"
+            f"    print('→ DECISIÓN: Se detectó heteroscedasticidad.')\n"
+            f"    print('  Corrección aplicada: {correction}')\n"
+            f"    print('  Esto invalida los errores estándar OLS clásicos.')\n"
+            f"    print('  Se recomendará usar estimadores robustos de varianza.')\n"
+            f"else:\n"
+            f"    print('→ No se detectó heteroscedasticidad. OLS clásico es válido.')"
+        ))
+
+    # --- 7.5 Feature Importance Methodology ---
+    if feat_imp:
+        top_feats_list = feat_imp.get("top_features", [])
+        cells.append(_cell_markdown(
+            "### 7.5 Selección de Variables\n"
+            "\n"
+            "**Objetivo:** Determinar las variables más predictivas usando dos métodos "
+            "complementarios: Mutual Information (no paramétrico) y Permutation Importance "
+            "(basado en modelo)."
+        ))
+        cells.append(_cell_code(
+            f"# Método de selección: Average Rank de MI + Permutation Importance\n"
+            f"top_features = {top_feats_list!r}\n"
+            f"\n"
+            f"print('=== Variables Seleccionadas (Top Features) ===')\n"
+            f"print('Método: Promedio de ranking entre MI y Permutation Importance\\n')\n"
+            f"for i, feat in enumerate(top_features, 1):\n"
+            f"    print(f'  {{i}}. {{feat}}')\n"
+            f"\n"
+            f"print(f'\\n→ DECISIÓN: Se seleccionaron {{len(top_features)}} variables principales.')\n"
+            f"print('  Estas se usarán como features primarias en el modelado.')"
+        ))
+
+    # --- 7.6 ML Strategy Reasoning ---
+    cells.append(_cell_markdown(
+        "### 7.6 Estrategia de Modelado\n"
+        "\n"
+        "**Agente:** ML Strategist\n\n"
+        "**Objetivo:** Basándose en todos los hallazgos anteriores, recomendar la familia "
+        "de modelos, hiperparámetros y técnica de evaluación óptima."
+    ))
+    model_family = state.get("model_family", "N/A")
+    metrica = state.get("metrica_principal", "N/A")
+    hp_technique = state.get("hyperparams_technique", "N/A")
+    models = state.get("modelos_recomendados", [])
+    models_json = json.dumps(models, indent=2, ensure_ascii=False, default=str)
+    tarea_label = state.get("tarea_sugerida", "N/A")
+    has_high_vif = bool(vif_all) and any(v > 10 for v in vif_all.values())
+    has_hetero = bool(bp_result) and bp_result.get("heteroscedastic", False)
+    cells.append(_cell_code(
+        f"# Razonamiento de seleccion de modelos\n"
+        f"print('=== Decisión de Modelado ===')\n"
+        f"print(f'  Familia de modelos: {model_family}')\n"
+        f"print(f'  Métrica principal: {metrica}')\n"
+        f"print(f'  Técnica de hiperparámetros: {hp_technique}')\n"
+        f"print()\n"
+        f"\n"
+        f"modelos = json.loads('''{models_json}''')\n"
+        f"print('=== Modelos Recomendados y Justificación ===')\n"
+        f"for i, m in enumerate(modelos, 1):\n"
+        f"    if isinstance(m, dict):\n"
+        f"        print(f'  {{i}}. {{m.get(\"name\", \"N/A\")}}')\n"
+        f"        print(f'     Razón: {{m.get(\"reason\", \"\")}}')\n"
+        f"        params = m.get('hyperparams', {{}})\n"
+        f"        if params:\n"
+        f"            print(f'     Hiperparámetros sugeridos: {{params}}')\n"
+        f"\n"
+        f"# Cadena de razonamiento\n"
+        f"print('\\n=== Cadena de Razonamiento ===')\n"
+        f"reasoning = []\n"
+        f"reasoning.append('1. Tarea: {tarea_label}')\n"
+        f"reasoning.append('2. Familia: {model_family}')\n"
+        f"if {has_high_vif}:\n"
+        f"    reasoning.append('3. VIF alto detectado → regularización recomendada')\n"
+        f"if {has_hetero}:\n"
+        f"    reasoning.append('4. Heteroscedasticidad → errores robustos necesarios')\n"
+        f"reasoning.append('5. Métrica de evaluación: {metrica}')\n"
+        f"reasoning.append('6. Búsqueda de hiperparámetros: {hp_technique}')\n"
+        f"for r in reasoning:\n"
+        f"    print(f'  {{r}}')"
+    ))
+
+    # --- 7.7 Re-Encoding ---
+    cells.append(_cell_markdown(
+        "### 7.7 Re-Encoding Final\n"
+        "\n"
+        "**Nodo:** Re-Encoder (Python puro)\n\n"
+        f"Basándose en `model_family = {model_family}`, se re-aplica el encoding final:\n"
+        f"- **linear** → Frequency Encoding (preserva información continua)\n"
+        f"- **tree** → Label Encoding (más eficiente para árboles de decisión)\n"
+        "\n"
+        f"Encoding final aplicado para familia **{model_family}**."
+    ))
+
+    # --- 7.8 Agent Status Summary ---
+    agent_status = state.get("agent_status", {})
+    advertencias = state.get("advertencias", [])
+    error_log = state.get("error_log", [])
+    status_json = json.dumps(agent_status, indent=2, ensure_ascii=False, default=str)
+    cells.append(_cell_markdown(
+        "### 7.8 Resumen de Ejecución del Pipeline"
+    ))
+    cells.append(_cell_code(
+        f"# Estado de cada agente\n"
+        f"agent_status = json.loads('''{status_json}''')\n"
+        f"\n"
+        f"agent_names = {{\n"
+        f"    'ag1': 'Research Lead',\n"
+        f"    'ag1b': 'Refine Equations',\n"
+        f"    'ag2': 'Data Steward',\n"
+        f"    'ag3': 'Data Engineer',\n"
+        f"    'ag4': 'Statistician',\n"
+        f"    'ag5': 'TS Analyst',\n"
+        f"    'ag6': 'ML Strategist',\n"
+        f"    'ag7': 'Viz Designer',\n"
+        f"    'ag8': 'Technical Writer',\n"
+        f"    're_encoder': 'Re-Encoder',\n"
+        f"}}\n"
+        f"\n"
+        f"print('=== Estado de Agentes ===')\n"
+        f"for agent_id, status in agent_status.items():\n"
+        f"    name = agent_names.get(agent_id, agent_id)\n"
+        f"    icon = '✅' if status == 'ok' else '⚠️' if status == 'fallback' else '❌'\n"
+        f"    print(f'  {{icon}} {{name}} ({{agent_id}}): {{status}}')\n"
+        f"\n"
+        f"n_ok = sum(1 for v in agent_status.values() if v == 'ok')\n"
+        f"n_fb = sum(1 for v in agent_status.values() if v == 'fallback')\n"
+        f"n_err = sum(1 for v in agent_status.values() if v == 'error')\n"
+        f"print(f'\\nResumen: {{n_ok}} OK, {{n_fb}} fallback, {{n_err}} error')"
+    ))
+    if advertencias:
+        adv_json = json.dumps(advertencias[:10], indent=2, ensure_ascii=False, default=str)
+        cells.append(_cell_code(
+            f"# Advertencias del pipeline\n"
+            f"advertencias = json.loads('''{adv_json}''')\n"
+            f"print('=== Advertencias ===')\n"
+            f"for i, adv in enumerate(advertencias, 1):\n"
+            f"    print(f'  {{i}}. {{adv}}')"
+        ))
+
+    # Interpretación general
     interp = hallazgos.get("interpretation", "")
     if interp:
         cells.append(_cell_markdown(
-            f"### Interpretación General\n\n{interp}"
+            f"### 7.9 Interpretación General\n"
+            f"\n"
+            f"{interp}"
         ))
 
-    cells.append(_cell_code(
-        f"hallazgos = json.loads('''{hallazgos_json}''')\n"
-        f"\n"
-        f"# Correlaciones significativas (|r| > 0.5)\n"
-        f"if 'correlations' in hallazgos:\n"
-        f"    spearman = hallazgos['correlations'].get('spearman', {{}})\n"
-        f"    print('=== Correlaciones Significativas (|r| > 0.5) ===')\n"
-        f"    seen = set()\n"
-        f"    for row_name, row_vals in spearman.items():\n"
-        f"        for col_name, val in row_vals.items():\n"
-        f"            if row_name == col_name:\n"
-        f"                continue\n"
-        f"            pair = tuple(sorted((row_name, col_name)))\n"
-        f"            if pair in seen:\n"
-        f"                continue\n"
-        f"            seen.add(pair)\n"
-        f"            if abs(val) > 0.5:\n"
-        f"                direction = 'positiva' if val > 0 else 'negativa'\n"
-        f"                print(f'  {{row_name}} <-> {{col_name}}: r={{val:.3f}} ({{direction}})')\n"
-        f"\n"
-        f"# Outliers\n"
-        f"if 'outliers' in hallazgos:\n"
-        f"    print('\\n=== Outliers (IQR 1.5x) ===')\n"
-        f"    for col, info in hallazgos['outliers'].items():\n"
-        f"        n_out = info.get('n_outliers', 0)\n"
-        f"        pct = info.get('pct', 0)\n"
-        f"        flag = ' ⚠' if pct > 5 else ''\n"
-        f"        print(f'  {{col}}: {{n_out}} outliers ({{pct:.1f}}%){{flag}}')"
-    ))
-
-    # ======================== 8. DECISION ========================
-    cells.append(_cell_markdown("## 8. Decision del Pipeline"))
-    cells.append(_cell_code(
-        f"decision = json.loads('''{decision_json}''')\n"
-        f"\n"
-        f"print('Tarea inferida:', decision.get('tarea'))\n"
-        f"print('Familia de modelo:', decision.get('model_family'))\n"
-        f"print('Metrica principal:', decision.get('metrica_principal'))\n"
-        f"print('Tecnica de hiperparametros:', decision.get('hyperparams_technique'))\n"
-        f"print()\n"
-        f"print('Modelos recomendados:')\n"
-        f"for m in decision.get('modelos_recomendados', []):\n"
-        f"    if isinstance(m, dict):\n"
-        f"        print(f'  - {{m.get(\"name\", \"N/A\")}}: {{m.get(\"reason\", \"\")}}')"
-    ))
-
-    # ======================== 9. FIGURAS GENERADAS ========================
-    if fig_paths:
-        cells.append(_cell_markdown("## 9. Figuras Generadas por el Pipeline"))
-        cells.append(_cell_code(
-            "from IPython.display import Image, HTML, display\n"
-            "from pathlib import Path as _Path\n"
-            "\n"
-            "# Mostrar figuras generadas por el pipeline\n"
-            "figuras = [\n" +
-            "".join(f"    (r'{fp}', '{desc}'),\n" for fp, desc in fig_paths) +
-            "]\n"
-            "\n"
-            "for path, desc in figuras:\n"
-            "    try:\n"
-            "        print(f'--- {desc} ---')\n"
-            "        p = _Path(path)\n"
-            "        if p.suffix == '.html':\n"
-            "            display(HTML(p.read_text(encoding='utf-8')))\n"
-            "        else:\n"
-            "            display(Image(filename=path))\n"
-            "    except Exception as e:\n"
-            "        print(f'No se pudo cargar {path}: {e}')"
-        ))
-
-    # ======================== 10. PROXIMOS PASOS ========================
+    # ======================== 8. PROXIMOS PASOS ========================
+    model_names = ", ".join(
+        m.get("name", "?") for m in models if isinstance(m, dict)
+    )
     cells.append(_cell_markdown(
-        "## 10. Proximos Pasos\n"
+        "## 8. Próximos Pasos\n"
         "\n"
-        "1. Entrenar los modelos recomendados con los hiperparametros sugeridos\n"
-        "2. Validar con cross-validation sobre el train set\n"
-        "3. Evaluar en test set con las metricas seleccionadas\n"
-        "4. Iterar segun resultados\n"
+        "Basándose en el análisis completo, estas son las acciones recomendadas:\n"
+        "\n"
+        f"1. **Entrenar** los modelos recomendados (`{model_names}`)\n"
+        f"2. **Validar** con cross-validation ({hp_technique}) sobre el train set\n"
+        f"3. **Evaluar** en test set con la métrica `{metrica}`\n"
+        "4. **Iterar** según resultados y ajustar hiperparámetros\n"
         "\n"
         "### Ejemplo de entrenamiento:"
     ))
@@ -668,7 +1061,12 @@ def build_notebook(state: dict[str, Any], output_dir: str | Path) -> Path:
 
     cells.append(_cell_markdown(
         "---\n"
-        f"*Generado automaticamente por EDA Agents (Run: `{run_id}`)*"
+        f"*Generado automáticamente por EDA Agents (Run: `{run_id}`)*\n"
+        "\n"
+        "**Secciones del notebook:**\n"
+        "1. Configuración → 2. Carga → 3. Hipótesis → 4. Perfil → "
+        "5. Preprocesamiento → 6. EDA Estadístico → "
+        "7. **Metodología Paso a Paso** → 8. Próximos Pasos"
     ))
 
     # ======================== BUILD NOTEBOOK ========================

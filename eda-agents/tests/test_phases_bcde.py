@@ -404,23 +404,18 @@ class TestNotebookBuilder:
         content = nb_path.read_text(encoding="utf-8")
         assert "Feature Importance" not in content
 
-    def test_notebook_handles_html_figures(self, base_state, tmp_path) -> None:
+    def test_notebook_methodology_section(self, base_state, tmp_path) -> None:
+        """Notebook includes step-by-step methodology instead of raw figure display."""
         from src.skills.notebook_builder import build_notebook
 
-        # Create a fake HTML figure
-        fig_dir = tmp_path / "figuras"
-        fig_dir.mkdir()
-        html_fig = fig_dir / "test_chart.html"
-        html_fig.write_text("<div>plotly chart</div>", encoding="utf-8")
-
-        base_state["figures"] = [
-            {"path": str(html_fig), "description": "Test Plotly Chart", "format": "html"},
-        ]
         base_state["dataset_train_final"] = base_state["train_path"]
+        base_state["agent_status"] = {"ag1": "ok", "ag2": "ok", "ag3": "ok"}
         nb_path = build_notebook(base_state, str(tmp_path))
         content = nb_path.read_text(encoding="utf-8")
-        assert "IPython.display" in content
-        assert "HTML" in content
+        assert "Metodolog" in content
+        assert "Paso a Paso" in content
+        assert "Cadena de Razonamiento" in content
+        assert "Estado de Agentes" in content
 
     def test_notebook_interactive_distribution(self, base_state, tmp_path) -> None:
         from src.skills.notebook_builder import build_notebook
