@@ -353,7 +353,6 @@ class TestNotebookBuilder:
     def test_notebook_has_plotly_imports(self, base_state, tmp_path) -> None:
         from src.skills.notebook_builder import build_notebook
 
-        base_state["dataset_train_final"] = base_state["train_path"]
         nb_path = build_notebook(base_state, str(tmp_path))
         content = nb_path.read_text(encoding="utf-8")
         nb = json.loads(content)
@@ -372,7 +371,6 @@ class TestNotebookBuilder:
     def test_notebook_has_spearman_correlation(self, base_state, tmp_path) -> None:
         from src.skills.notebook_builder import build_notebook
 
-        base_state["dataset_train_final"] = base_state["train_path"]
         nb_path = build_notebook(base_state, str(tmp_path))
         content = nb_path.read_text(encoding="utf-8")
         assert "spearman" in content.lower()
@@ -380,47 +378,38 @@ class TestNotebookBuilder:
     def test_notebook_has_feature_importance_section(self, base_state, tmp_path) -> None:
         from src.skills.notebook_builder import build_notebook
 
-        base_state["feature_importance"] = {
-            "mutual_information": {"x1": 0.9, "x2": 0.5},
-            "permutation_importance": {
-                "x1": {"mean": 0.8, "std": 0.1},
-                "x2": {"mean": 0.3, "std": 0.05},
-            },
-            "top_features": ["x1", "x2"],
-        }
-        base_state["dataset_train_final"] = base_state["train_path"]
         nb_path = build_notebook(base_state, str(tmp_path))
         content = nb_path.read_text(encoding="utf-8")
-        assert "Feature Importance" in content
+        assert "Importancia de Variables" in content
         assert "Mutual Information" in content
         assert "Permutation Importance" in content
 
-    def test_notebook_no_feature_importance_when_empty(self, base_state, tmp_path) -> None:
+    def test_notebook_always_has_live_feature_importance(self, base_state, tmp_path) -> None:
         from src.skills.notebook_builder import build_notebook
 
         base_state["feature_importance"] = {}
-        base_state["dataset_train_final"] = base_state["train_path"]
         nb_path = build_notebook(base_state, str(tmp_path))
         content = nb_path.read_text(encoding="utf-8")
-        assert "Feature Importance" not in content
+        # Live code always generates feature importance section
+        assert "Mutual Information" in content
+        assert "Permutation Importance" in content
 
-    def test_notebook_methodology_section(self, base_state, tmp_path) -> None:
-        """Notebook includes step-by-step methodology instead of raw figure display."""
+    def test_notebook_has_live_statistical_code(self, base_state, tmp_path) -> None:
+        """Notebook generates live executable code, not pre-computed results."""
         from src.skills.notebook_builder import build_notebook
 
-        base_state["dataset_train_final"] = base_state["train_path"]
-        base_state["agent_status"] = {"ag1": "ok", "ag2": "ok", "ag3": "ok"}
         nb_path = build_notebook(base_state, str(tmp_path))
         content = nb_path.read_text(encoding="utf-8")
-        assert "Metodolog" in content
-        assert "Paso a Paso" in content
-        assert "Cadena de Razonamiento" in content
-        assert "Estado de Agentes" in content
+        # Live code markers — computed from scratch, not embedded results
+        assert "variance_inflation_factor" in content
+        assert "shapiro" in content
+        assert "train_test_split" in content
+        assert "mutual_info" in content
+        assert "permutation_importance" in content
 
     def test_notebook_interactive_distribution(self, base_state, tmp_path) -> None:
         from src.skills.notebook_builder import build_notebook
 
-        base_state["dataset_train_final"] = base_state["train_path"]
         nb_path = build_notebook(base_state, str(tmp_path))
         content = nb_path.read_text(encoding="utf-8")
         assert "go.Histogram" in content
