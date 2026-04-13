@@ -22,6 +22,8 @@ from src.skills.report_builder import (
     build_decision,
     serialize_state,
 )
+from src.skills.html_report import build_html_report
+from src.skills.notebook_builder import build_notebook
 
 __all__ = [
     # encoding
@@ -46,4 +48,8 @@ __all__ = [
     "convert_to_pdf",
     "build_decision",
     "serialize_state",
+    # html_report
+    "build_html_report",
+    # notebook_builder
+    "build_notebook",
 ]

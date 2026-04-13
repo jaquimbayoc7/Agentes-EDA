@@ -390,3 +390,158 @@ class TestSerializeState:
         state = {"a": 1, "b": [1, 2], "c": {"nested": True}}
         result = serialize_state(state)
         assert result == state
+
+
+# ---------------------------------------------------------------------------
+# html_report
+# ---------------------------------------------------------------------------
+from src.skills.html_report import build_html_report
+
+
+class TestBuildHtmlReport:
+    def test_generates_html_file(self, sample_state: dict, tmp_path: Path) -> None:
+        sample_state["run_id"] = "test_html"
+        sample_state["figures"] = []
+        sample_state["agent_status"] = {"ag1": "ok", "ag2": "ok"}
+        sample_state["perfil_columnas"] = {"col1": {"dtype": "float64", "n_unique": 10, "null_pct": 0.0}}
+        html_path = build_html_report(sample_state, tmp_path)
+        assert html_path.exists()
+        assert html_path.suffix == ".html"
+        assert html_path.parent.name == "reportesFinales"
+
+    def test_html_contains_question(self, sample_state: dict, tmp_path: Path) -> None:
+        sample_state["run_id"] = "test_html2"
+        sample_state["figures"] = []
+        sample_state["agent_status"] = {}
+        sample_state["perfil_columnas"] = {}
+        html_path = build_html_report(sample_state, tmp_path)
+        content = html_path.read_text(encoding="utf-8")
+        assert sample_state["research_question"] in content
+
+    def test_html_contains_sections(self, sample_state: dict, tmp_path: Path) -> None:
+        sample_state["run_id"] = "test_html3"
+        sample_state["figures"] = []
+        sample_state["agent_status"] = {"ag1": "ok"}
+        sample_state["perfil_columnas"] = {}
+        html_path = build_html_report(sample_state, tmp_path)
+        content = html_path.read_text(encoding="utf-8")
+        assert "Resumen Ejecutivo" in content
+        assert "Hipotesis" in content
+        assert "Proximos Pasos" in content
+
+    def test_html_has_theme_toggle(self, sample_state: dict, tmp_path: Path) -> None:
+        sample_state["run_id"] = "test_html4"
+        sample_state["figures"] = []
+        sample_state["agent_status"] = {}
+        sample_state["perfil_columnas"] = {}
+        html_path = build_html_report(sample_state, tmp_path)
+        content = html_path.read_text(encoding="utf-8")
+        assert "toggleTheme" in content
+
+    def test_html_embeds_figures(self, sample_state: dict, tmp_path: Path) -> None:
+        # Create a small PNG
+        figures_dir = tmp_path / "figures"
+        figures_dir.mkdir()
+        fig_path = figures_dir / "test_fig.png"
+        # Minimal 1x1 white PNG
+        import struct, zlib
+        def _mini_png():
+            sig = b'\x89PNG\r\n\x1a\n'
+            ihdr_data = struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0)
+            ihdr_crc = zlib.crc32(b'IHDR' + ihdr_data) & 0xffffffff
+            ihdr = struct.pack('>I', 13) + b'IHDR' + ihdr_data + struct.pack('>I', ihdr_crc)
+            raw = b'\x00\x00\xff\xff\xff'
+            idat_data = zlib.compress(raw)
+            idat_crc = zlib.crc32(b'IDAT' + idat_data) & 0xffffffff
+            idat = struct.pack('>I', len(idat_data)) + b'IDAT' + idat_data + struct.pack('>I', idat_crc)
+            iend_crc = zlib.crc32(b'IEND') & 0xffffffff
+            iend = struct.pack('>I', 0) + b'IEND' + struct.pack('>I', iend_crc)
+            return sig + ihdr + idat + iend
+        fig_path.write_bytes(_mini_png())
+
+        sample_state["run_id"] = "test_html5"
+        sample_state["figures"] = [{"name": "test_fig.png", "path": str(fig_path), "description": "Test figure"}]
+        sample_state["agent_status"] = {}
+        sample_state["perfil_columnas"] = {}
+        html_path = build_html_report(sample_state, tmp_path)
+        content = html_path.read_text(encoding="utf-8")
+        assert "data:image/png;base64," in content
+
+
+# ---------------------------------------------------------------------------
+# notebook_builder
+# ---------------------------------------------------------------------------
+from src.skills.notebook_builder import build_notebook
+
+
+class TestBuildNotebook:
+    def test_generates_ipynb_file(self, sample_state: dict, tmp_path: Path) -> None:
+        sample_state["run_id"] = "test_nb"
+        sample_state["dataset_path"] = "tests/fixtures/sample_100.csv"
+        sample_state["train_path"] = "outputs/test_nb/train.csv"
+        sample_state["test_path"] = "outputs/test_nb/test.csv"
+        sample_state["dataset_train_final"] = "outputs/test_nb/train_final.csv"
+        sample_state["dataset_test_final"] = "outputs/test_nb/test_final.csv"
+        sample_state["figures"] = []
+        sample_state["random_seed"] = 42
+        nb_path = build_notebook(sample_state, tmp_path)
+        assert nb_path.exists()
+        assert nb_path.suffix == ".ipynb"
+        assert nb_path.parent.name == "notebooksFinales"
+
+    def test_notebook_is_valid_json(self, sample_state: dict, tmp_path: Path) -> None:
+        sample_state["run_id"] = "test_nb2"
+        sample_state["dataset_path"] = "data/test.csv"
+        sample_state["train_path"] = ""
+        sample_state["test_path"] = ""
+        sample_state["dataset_train_final"] = ""
+        sample_state["dataset_test_final"] = ""
+        sample_state["figures"] = []
+        sample_state["random_seed"] = 42
+        nb_path = build_notebook(sample_state, tmp_path)
+        nb = json.loads(nb_path.read_text(encoding="utf-8"))
+        assert nb["nbformat"] == 4
+        assert "cells" in nb
+        assert len(nb["cells"]) > 5
+
+    def test_notebook_contains_question(self, sample_state: dict, tmp_path: Path) -> None:
+        sample_state["run_id"] = "test_nb3"
+        sample_state["dataset_path"] = "data/test.csv"
+        sample_state["train_path"] = ""
+        sample_state["test_path"] = ""
+        sample_state["dataset_train_final"] = ""
+        sample_state["dataset_test_final"] = ""
+        sample_state["figures"] = []
+        sample_state["random_seed"] = 42
+        nb_path = build_notebook(sample_state, tmp_path)
+        content = nb_path.read_text(encoding="utf-8")
+        assert sample_state["research_question"] in content
+
+    def test_notebook_has_code_and_markdown_cells(self, sample_state: dict, tmp_path: Path) -> None:
+        sample_state["run_id"] = "test_nb4"
+        sample_state["dataset_path"] = "data/test.csv"
+        sample_state["train_path"] = ""
+        sample_state["test_path"] = ""
+        sample_state["dataset_train_final"] = ""
+        sample_state["dataset_test_final"] = ""
+        sample_state["figures"] = []
+        sample_state["random_seed"] = 42
+        nb_path = build_notebook(sample_state, tmp_path)
+        nb = json.loads(nb_path.read_text(encoding="utf-8"))
+        cell_types = {c["cell_type"] for c in nb["cells"]}
+        assert "markdown" in cell_types
+        assert "code" in cell_types
+
+    def test_notebook_regression_model_example(self, sample_state: dict, tmp_path: Path) -> None:
+        sample_state["run_id"] = "test_nb5"
+        sample_state["tarea_sugerida"] = "regression"
+        sample_state["dataset_path"] = "data/test.csv"
+        sample_state["train_path"] = ""
+        sample_state["test_path"] = ""
+        sample_state["dataset_train_final"] = ""
+        sample_state["dataset_test_final"] = ""
+        sample_state["figures"] = []
+        sample_state["random_seed"] = 42
+        nb_path = build_notebook(sample_state, tmp_path)
+        content = nb_path.read_text(encoding="utf-8")
+        assert "Ridge" in content

@@ -24,6 +24,8 @@ from src.graph import build_graph, get_sqlite_checkpointer
 from src.state import EDAState
 from src.utils.config import PipelineConfig
 from src.utils.logger import configure_logging
+from src.skills.html_report import build_html_report
+from src.skills.notebook_builder import build_notebook
 
 
 def parse_args() -> argparse.Namespace:
@@ -177,6 +179,26 @@ def main() -> None:
                 print(f"  [OK] {node_name:25s} [{status}]")
 
         # --- Guardar estado final ---
+        # Obtener estado final del grafo para post-procesamiento
+        final_snapshot = graph.get_state(graph_config)
+        final_state = dict(final_snapshot.values) if final_snapshot and final_snapshot.values else initial_state
+
+        # --- Generar reporte HTML dinamico ---
+        try:
+            html_path = build_html_report(final_state, output_dir)
+            print(f"  [OK] {'HTML report':25s} [{html_path.name}]")
+        except Exception as html_err:
+            log.warning("html_report_failed", error=str(html_err))
+            print(f"  [WARN] HTML report fallo: {html_err}")
+
+        # --- Generar notebook reproducible ---
+        try:
+            nb_path = build_notebook(final_state, output_dir)
+            print(f"  [OK] {'Notebook':25s} [{nb_path.name}]")
+        except Exception as nb_err:
+            log.warning("notebook_generation_failed", error=str(nb_err))
+            print(f"  [WARN] Notebook fallo: {nb_err}")
+
         print(f"\n{'='*60}")
         print(f"  Pipeline completado")
         print(f"  Outputs en: outputs/{run_id}/")

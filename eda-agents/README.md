@@ -187,24 +187,48 @@ python main.py \
 Cada ejecucion genera una carpeta en `outputs/<run_id>/`:
 
 ```
-outputs/f70cbbfb/
-  report.md                   # Informe completo (secciones 1-8)
-  decision.json               # Tarea, modelos, metrica, model_family
-  state_final.json            # Estado completo del grafo
-  run.log.jsonl               # Log estructurado de la ejecucion
-  train.csv                   # Split de entrenamiento original
-  test.csv                    # Split de prueba original
-  dataset_train_provisional.csv  # Train con encoding provisional
-  dataset_train_final.csv     # Train con encoding final
-  dataset_test_procesado.csv  # Test procesado
-  dataset_test_final.csv      # Test con encoding final
+outputs/<run_id>/
+  report.md                    # Informe completo (secciones 1-12)
+  decision.json                # Tarea, modelos, metrica, model_family
+  state_final.json             # Estado completo del grafo
+  run.log.jsonl                # Log estructurado de la ejecucion
+  train.csv                    # Split de entrenamiento original
+  test.csv                     # Split de prueba original
+  dataset_train_provisional.csv   # Train con encoding provisional
+  dataset_train_final.csv      # Train con encoding final
+  dataset_test_procesado.csv   # Test procesado
+  dataset_test_final.csv       # Test con encoding final
   figures/
-    corr_matrix.png           # Matriz de correlaciones
-    dist_*.png                # Distribuciones de variables
-    box_*.png                 # Boxplots
-    pairplot.png              # Pairplot top-6 numericas
-    target_dist.png           # Distribucion del target
+    corr_matrix.png            # Matriz de correlaciones
+    dist_*.png                 # Distribuciones de variables
+    box_*.png                  # Boxplots
+    pairplot.png               # Pairplot top-6 numericas
+    target_dist.png            # Distribucion del target
+  reportesFinales/
+    reporte_eda.html           # Pagina HTML dinamica con todo el EDA
+  notebooksFinales/
+    eda_reproducible_<run_id>.ipynb  # Notebook Jupyter reproducible
 ```
+
+### Reporte HTML Dinamico
+
+Se genera automaticamente una pagina HTML auto-contenida en `reportesFinales/` con:
+- Navegacion lateral por secciones
+- Figuras embebidas (base64, no requiere archivos externos)
+- Tablas ordenables
+- Tema claro/oscuro
+- KPIs visuales
+- Modal para zoom de imagenes
+
+### Notebook Reproducible
+
+Se genera automaticamente un notebook Jupyter en `notebooksFinales/` con:
+- Carga de datos y configuracion
+- Perfil de datos (nulos, cardinalidad, tipos)
+- Preprocesamiento y encoding aplicado
+- Visualizaciones (correlaciones, distribuciones, boxplots, pairplot)
+- Hallazgos estadisticos del pipeline
+- Decision de modelos y ejemplo de entrenamiento
 
 ### Ejemplo de `decision.json`
 
@@ -244,6 +268,8 @@ eda-agents/
     skills/
       encoding.py            # OHE, Label, Ordinal, Frequency encoding
       report_builder.py      # Generacion del informe markdown
+      html_report.py         # Generacion de pagina HTML dinamica
+      notebook_builder.py    # Generacion de notebook Jupyter
       statistical_tests.py   # Breusch-Pagan, VIF, correlaciones
       timeseries.py          # ADF, KPSS, deteccion de cambios
     utils/
@@ -278,7 +304,7 @@ pytest tests/ --cov=src --cov-report=term-missing
 pytest tests/test_agents.py -v
 ```
 
-**131 tests** cubren agentes, skills, grafo, estado, validacion y pipeline end-to-end.
+**141 tests** cubren agentes, skills, grafo, estado, validacion, HTML report, notebook builder y pipeline end-to-end.
 
 ## Convenciones del Proyecto
 
