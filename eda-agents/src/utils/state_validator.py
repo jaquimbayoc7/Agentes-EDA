@@ -95,6 +95,8 @@ class Ag4Output(BaseModel):
     breusch_pagan_result: Optional[dict] = None
     modelo_correccion_heterosc: Optional[str] = None
     vif_flags: list
+    vif_all: dict = Field(default_factory=dict)
+    feature_importance: dict = Field(default_factory=dict)
     agent_status: dict
 
 

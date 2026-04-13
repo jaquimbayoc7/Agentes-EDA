@@ -36,14 +36,14 @@ def compute_correlations(
     ----------
     df : DataFrame con columnas numéricas.
     features : lista de columnas a incluir.
-    methods : métodos de correlación ("pearson", "spearman"). Default: ["pearson"].
+    methods : métodos de correlación ("pearson", "spearman"). Default: ["spearman"].
 
     Returns
     -------
     dict con clave por método, valor = dict-de-dict (serializable).
     """
     if methods is None:
-        methods = ["pearson"]
+        methods = ["spearman"]
 
     result: dict[str, Any] = {}
     valid_cols = [c for c in features if c in df.columns]
@@ -52,7 +52,11 @@ def compute_correlations(
 
     for method in methods:
         corr = df[valid_cols].corr(method=method)
-        result[method] = corr.to_dict()
+        # Convert numpy scalars to native Python float for serialization
+        result[method] = {
+            row: {col: float(val) for col, val in cols.items()}
+            for row, cols in corr.to_dict().items()
+        }
 
     return result
 
@@ -174,11 +178,18 @@ def compute_vif(
     all_vif: dict[str, float] = {}
     flagged: list[dict[str, Any]] = []
 
-    for i, col in enumerate(valid_cols):
-        vif_val = variance_inflation_factor(vif_df.values, i)
-        all_vif[col] = float(vif_val)
-        if vif_val > threshold:
-            flagged.append({"column": col, "vif": float(vif_val)})
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        for i, col in enumerate(valid_cols):
+            vif_val = variance_inflation_factor(vif_df.values, i)
+            vif_float = float(vif_val)
+            # Handle inf/nan from perfect multicollinearity (R²=1)
+            if not np.isfinite(vif_float):
+                vif_float = 9999.0
+            all_vif[col] = vif_float
+            if vif_float > threshold:
+                flagged.append({"column": col, "vif": vif_float})
 
     return flagged, all_vif
 

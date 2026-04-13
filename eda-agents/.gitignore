@@ -21,6 +21,10 @@ env/
 outputs/
 .checkpoints/
 
+# Data files (user datasets)
+data/*.csv
+!data/.gitkeep
+
 # Profiling
 *.prof
 

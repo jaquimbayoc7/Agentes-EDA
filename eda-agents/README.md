@@ -2,45 +2,89 @@
 
 Sistema multi-agente de **Analisis Exploratorio de Datos** (EDA) construido con LangGraph y Claude API. Ejecuta un pipeline de 8 agentes especializados que analiza datasets tabulares o de series de tiempo, y genera un informe completo con hipotesis, estadisticas, visualizaciones y recomendaciones de modelos.
 
-## Arquitectura
+## Arquitectura del Sistema
 
-```
-START
-  |
-  +--[parallel]--> Research Lead ----+
-  |                                  |
-  +--[parallel]--> Data Steward -----+
-                                     |
-                               Data Engineer
-                                     |
-                    +--[parallel]--> Statistician --------+
-                    |                                     |
-                    +--[parallel]--> TS Analyst* ---------+
-                                     (* solo si timeseries)
-                                     |
-                               ML Strategist
-                                     |
-                               Re-Encoder
-                                     |
-                           Visualization Designer
-                                     |
-                            Technical Writer
-                                     |
-                                    END
+```mermaid
+flowchart TD
+    START([🚀 START]) --> research_lead["🔬 Agent 01\nResearch Lead"]
+    START --> data_steward["📋 Agent 02\nData Steward"]
+
+    research_lead --> data_engineer["⚙️ Agent 03\nData Engineer"]
+    data_steward --> data_engineer
+
+    data_engineer --> statistician["📊 Agent 04\nStatistician"]
+    data_engineer -->|"si flag_timeseries"| ts_analyst["📈 Agent 05\nTS Analyst"]
+
+    statistician --> refine["🔄 Refine Equations\n(Agent 01b)"]
+    ts_analyst --> refine
+
+    refine --> ml_strategist["🤖 Agent 06\nML Strategist"]
+    ml_strategist --> re_encoder["🔧 Re-Encoder\n(Python puro)"]
+    re_encoder --> viz_designer["🎨 Agent 07\nViz Designer"]
+    viz_designer --> technical_writer["📝 Agent 08\nTechnical Writer"]
+    technical_writer --> END([✅ END])
+
+    subgraph "Fase 1 — Investigación & Perfilado"
+        research_lead
+        data_steward
+    end
+
+    subgraph "Fase 2 — Ingeniería de Datos"
+        data_engineer
+    end
+
+    subgraph "Fase 3 — Análisis Estadístico"
+        statistician
+        ts_analyst
+        refine
+    end
+
+    subgraph "Fase 4 — Estrategia & Encoding Final"
+        ml_strategist
+        re_encoder
+    end
+
+    subgraph "Fase 5 — Visualización & Reporte"
+        viz_designer
+        technical_writer
+    end
+
+    style START fill:#4CAF50,color:#fff,stroke:#388E3C
+    style END fill:#4CAF50,color:#fff,stroke:#388E3C
+    style research_lead fill:#1565C0,color:#fff
+    style data_steward fill:#1565C0,color:#fff
+    style data_engineer fill:#6A1B9A,color:#fff
+    style statistician fill:#E65100,color:#fff
+    style ts_analyst fill:#E65100,color:#fff
+    style refine fill:#E65100,color:#fff
+    style ml_strategist fill:#00695C,color:#fff
+    style re_encoder fill:#00695C,color:#fff
+    style viz_designer fill:#AD1457,color:#fff
+    style technical_writer fill:#AD1457,color:#fff
 ```
 
-## Los 8 Agentes
+### Flujo del Pipeline
+
+1. **Fase 1 (paralelo):** `Research Lead` formula hipótesis y busca literatura mientras `Data Steward` perfila el dataset y hace train/test split.
+2. **Fase 2:** `Data Engineer` aplica encoding provisional y feature engineering.
+3. **Fase 3 (paralelo condicional):** `Statistician` ejecuta EDA tabular (correlaciones, VIF, Breusch-Pagan). Si `flag_timeseries=True`, `TS Analyst` corre en paralelo (ADF, KPSS, ARIMA). Luego `Refine Equations` mejora las ecuaciones PICO con los hallazgos.
+4. **Fase 4:** `ML Strategist` recomienda modelos y `Re-Encoder` re-aplica encoding final según `model_family` (linear→Frequency, tree→Label).
+5. **Fase 5:** `Viz Designer` genera 11+ figuras interactivas y `Technical Writer` produce el informe final, reporte HTML dinámico y notebook Jupyter reproducible.
+
+## Los 8 Agentes + 2 Nodos Auxiliares
 
 | # | Agente | Responsabilidad |
 |---|--------|----------------|
-| 1 | **Research Lead** | Genera ecuaciones PICO, busca literatura con Claude, formula 3 hipotesis (confirmatoria, exploratoria, alternativa), infiere tipo de tarea |
+| 1 | **Research Lead** | Genera ecuaciones PICO, busca literatura con Claude, formula 3 hipótesis (confirmatoria, exploratoria, alternativa), infiere tipo de tarea |
+| 1b | **Refine Equations** | Refina ecuaciones de búsqueda PICO usando los hallazgos estadísticos del Statistician |
 | 2 | **Data Steward** | Perfila columnas, detecta tipos, calcula nulos/cardinalidad, hace train/test split, detecta desbalance y series temporales |
 | 3 | **Data Engineer** | Aplica encoding (OHE/Label/Ordinal), resampling para desbalance, feature engineering, genera datasets provisionales |
-| 4 | **Statistician** | EDA tabular: correlaciones, test de Breusch-Pagan, VIF, medianas, distribucion del target |
-| 5 | **TS Analyst** | Analisis de series de tiempo: estacionariedad (ADF/KPSS), deteccion de cambios, ARIMA/SARIMA/SARIMAX/VAR (solo si flag_timeseries=True) |
-| 6 | **ML Strategist** | Recomienda modelos, hiperparametros, tecnica de busqueda, metrica principal, define model_family (linear/tree) |
-| 7 | **Viz Designer** | Genera figuras PNG: matriz de correlaciones, distribuciones, boxplots, pairplot, distribucion del target |
-| 8 | **Technical Writer** | Produce el informe final `report.md` con 12 secciones estructuradas |
+| 4 | **Statistician** | EDA tabular: correlaciones, test de Breusch-Pagan, VIF completo, medianas, distribución del target |
+| 5 | **TS Analyst** | Análisis de series de tiempo: estacionariedad (ADF/KPSS), detección de cambios, ARIMA/SARIMA/SARIMAX/VAR (solo si flag_timeseries=True) |
+| 6 | **ML Strategist** | Recomienda modelos, hiperparámetros, técnica de búsqueda, métrica principal, define model_family (linear/tree) |
+| — | **Re-Encoder** | Nodo Python puro: re-aplica encoding final según model_family (linear→Frequency, tree→Label) |
+| 7 | **Viz Designer** | Genera 11+ figuras interactivas Plotly: correlaciones, distribuciones multi-fila, boxplots, pairplot, target, VIF (barras color-código), Q-Q normalidad, residuales Breusch-Pagan |
+| 8 | **Technical Writer** | Produce informe `report.md`, reporte HTML dinámico con navegación lateral y tema claro/oscuro, y notebook Jupyter reproducible |
 
 ## Stack Tecnologico
 
@@ -200,35 +244,46 @@ outputs/<run_id>/
   dataset_test_final.csv       # Test con encoding final
   figures/
     corr_matrix.png            # Matriz de correlaciones
-    dist_*.png                 # Distribuciones de variables
+    dist_*.png                 # Distribuciones de variables (multi-fila)
     box_*.png                  # Boxplots
-    pairplot.png               # Pairplot top-6 numericas
-    target_dist.png            # Distribucion del target
+    pairplot.png               # Pairplot top-6 numéricas
+    target_dist.png            # Distribución del target
+    vif_bar.png                # Barras VIF color-código
+    qq_normality.png           # Q-Q plots de normalidad
+    bp_residuals.png           # Residuales Breusch-Pagan
   reportesFinales/
     reporte_eda.html           # Pagina HTML dinamica con todo el EDA
   notebooksFinales/
     eda_reproducible_<run_id>.ipynb  # Notebook Jupyter reproducible
 ```
 
-### Reporte HTML Dinamico
+### Reporte HTML Dinámico
 
-Se genera automaticamente una pagina HTML auto-contenida en `reportesFinales/` con:
-- Navegacion lateral por secciones
-- Figuras embebidas (base64, no requiere archivos externos)
-- Tablas ordenables
+Se genera automáticamente una página HTML auto-contenida en `reportesFinales/` con:
+- Navegación lateral por secciones (hipótesis, datos, estadísticas, modelos, figuras, hallazgos, referencias, descargas)
+- Figuras embebidas (base64) con exportación a **400 DPI** por figura
+- Tablas ordenables y KPIs visuales con íconos
 - Tema claro/oscuro
-- KPIs visuales
-- Modal para zoom de imagenes
+- Sección de **Normalidad** con tabla de resultados por variable
+- Sección de **VIF** con tabla color-código (rojo >10, naranja 5-10, verde <5)
+- Sección de **Breusch-Pagan** con resultado de heterocedasticidad
+- **Hallazgos EDA** organizados en tarjetas con KPIs resumen (vars normales, outliers, VIF alto, top features)
+- **Referencias** con tarjetas ricas: DOI con enlace clickeable, URL del artículo, fuente (Web/Académico), hallazgo clave
+- Botones de descarga (CSV, JSON, notebook)
+- Modal para zoom de imágenes
 
 ### Notebook Reproducible
 
-Se genera automaticamente un notebook Jupyter en `notebooksFinales/` con:
-- Carga de datos y configuracion
+Se genera automáticamente un notebook Jupyter en `notebooksFinales/` con:
+- Carga de datos y configuración
 - Perfil de datos (nulos, cardinalidad, tipos)
 - Preprocesamiento y encoding aplicado
 - Visualizaciones (correlaciones, distribuciones, boxplots, pairplot)
-- Hallazgos estadisticos del pipeline
-- Decision de modelos y ejemplo de entrenamiento
+- Gráfico de barras VIF con umbrales color-código
+- Q-Q plots de normalidad por variable
+- Test de Breusch-Pagan y gráfico de residuales
+- Hallazgos estadísticos del pipeline
+- Decisión de modelos y ejemplo de entrenamiento
 
 ### Ejemplo de `decision.json`
 
@@ -276,6 +331,7 @@ eda-agents/
       config.py              # PipelineConfig (carga YAML + .env)
       llm.py                 # Cliente Claude (call_claude, call_claude_json)
       logger.py              # structlog configurado
+      sanitize.py            # Sanitizacion recursiva de tipos numpy
       state_validator.py     # Validacion Pydantic del estado
   tests/
     test_agents.py           # Tests de los 8 agentes
@@ -304,7 +360,7 @@ pytest tests/ --cov=src --cov-report=term-missing
 pytest tests/test_agents.py -v
 ```
 
-**141 tests** cubren agentes, skills, grafo, estado, validacion, HTML report, notebook builder y pipeline end-to-end.
+**195 tests** cubren agentes, skills, grafo, estado, validación, HTML report, notebook builder, sanitización numpy y pipeline end-to-end.
 
 ## Convenciones del Proyecto
 

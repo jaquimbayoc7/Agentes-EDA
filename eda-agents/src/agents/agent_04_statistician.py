@@ -26,6 +26,11 @@ from src.skills.statistical_tests import (
     breusch_pagan_test,
     suggest_heteroscedasticity_correction,
 )
+from src.skills.feature_importance import (
+    compute_mutual_information,
+    compute_permutation_importance,
+    select_top_features,
+)
 
 logger = structlog.get_logger()
 
@@ -62,15 +67,18 @@ def statistician(state: EDAState) -> dict[str, Any]:
         else:
             features = numeric_cols
 
+        # Features incluyendo target para correlación target-aware
+        features_with_target = features + ([target] if target and target in numeric_cols else [])
+
         hallazgos: dict[str, Any] = {}
         figures: list[dict[str, Any]] = []
         output_dir = Path("outputs") / run_id / "figures"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Correlaciones ---
-        if features:
-            hallazgos["correlations"] = compute_correlations(df, features)
-            log.info("correlations_computed")
+        # --- Correlaciones (Spearman, target-aware) ---
+        if features_with_target:
+            hallazgos["correlations"] = compute_correlations(df, features_with_target)
+            log.info("correlations_computed", method="spearman", n_cols=len(features_with_target))
 
         # --- Outliers (IQR) ---
         hallazgos["outliers"] = detect_outliers_iqr(df, features)
@@ -79,8 +87,38 @@ def statistician(state: EDAState) -> dict[str, Any]:
         hallazgos["normality"] = test_normality(df, features)
 
         # --- VIF ---
-        vif_flags, _ = compute_vif(df, features, threshold=config.vif_threshold)
+        vif_flags, all_vif = compute_vif(df, features, threshold=config.vif_threshold)
         hallazgos["vif_summary"] = {"n_flagged": len(vif_flags)}
+        hallazgos["vif_all"] = all_vif
+
+        # --- Feature Importance ---
+        feat_imp: dict[str, Any] = {}
+        top_features: list[str] = []
+        if target and target in numeric_cols and features:
+            try:
+                mi_scores = compute_mutual_information(
+                    df, features, target, task=tarea, random_state=config.random_seed,
+                )
+                feat_imp["mutual_information"] = mi_scores
+                log.info("mutual_information_computed", n_features=len(mi_scores))
+            except Exception as mi_err:
+                log.warning("mutual_information_failed", error=str(mi_err))
+                mi_scores = {}
+
+            try:
+                perm_scores = compute_permutation_importance(
+                    df, features, target, task=tarea, random_state=config.random_seed,
+                )
+                feat_imp["permutation_importance"] = perm_scores
+                log.info("permutation_importance_computed", n_features=len(perm_scores))
+            except Exception as pi_err:
+                log.warning("permutation_importance_failed", error=str(pi_err))
+                perm_scores = {}
+
+            top_features = select_top_features(mi_scores, perm_scores, top_k=10)
+            feat_imp["top_features"] = top_features
+
+        hallazgos["feature_importance"] = feat_imp
 
         # --- Breusch-Pagan (solo regresión) ---
         bp_result: dict[str, Any] | None = None
@@ -103,6 +141,8 @@ def statistician(state: EDAState) -> dict[str, Any]:
             "breusch_pagan_result": bp_result,
             "modelo_correccion_heterosc": modelo_correccion,
             "vif_flags": vif_flags,
+            "vif_all": all_vif,
+            "feature_importance": feat_imp,
             "figures": figures,
             "agent_status": {**state.get("agent_status", {}), "ag4": "ok"},
         }
@@ -118,6 +158,8 @@ def statistician(state: EDAState) -> dict[str, Any]:
             "breusch_pagan_result": None,
             "modelo_correccion_heterosc": None,
             "vif_flags": [],
+            "vif_all": {},
+            "feature_importance": {},
             "figures": [],
             "agent_status": {**state.get("agent_status", {}), "ag4": "error"},
             "error_log": [{"agent": "ag4", "error": str(e), "run_id": run_id}],

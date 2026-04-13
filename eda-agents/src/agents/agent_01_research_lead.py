@@ -15,6 +15,7 @@ from src.state import EDAState
 from src.utils.config import PipelineConfig
 from src.utils.llm import call_claude, call_claude_json
 from src.utils.state_validator import validate_ag1_output
+from src.utils.tavily_client import search_literature_tavily
 
 logger = structlog.get_logger()
 
@@ -53,8 +54,13 @@ def research_lead(state: EDAState) -> dict[str, Any]:
         # --- Generar hipótesis ---
         hipotesis = _generate_hypotheses(question, context, refs, config)
 
-        # --- Inferir tarea sugerida ---
-        tarea_sugerida = _infer_task(question, refs, config)
+        # --- Inferir tarea sugerida (o usar override del CLI) ---
+        task_override = state.get("task_override")
+        if task_override:
+            tarea_sugerida = task_override
+            log.info("task_override_used", task=task_override)
+        else:
+            tarea_sugerida = _infer_task(question, refs, config)
 
         status = "ok" if research_ok else "fallback"
         output: dict[str, Any] = {
@@ -115,15 +121,40 @@ def _search_literature(
     context: str,
     config: PipelineConfig,
 ) -> list[dict[str, Any]]:
-    """Busca literatura académica relevante usando Claude.
+    """Busca literatura académica usando Tavily + Claude.
 
-    Claude actúa como asistente de investigación: dado las ecuaciones PICO
-    y la pregunta de investigación, genera una revisión estructurada con
-    referencias plausibles, autores, años y hallazgos clave.
+    Estrategia:
+    1. Si Tavily API key disponible → búsqueda web real por ecuaciones PICO
+    2. Claude sintetiza/complementa con conocimiento propio
+    3. Combina resultados deduplicados
     """
-    if not config.anthropic_api_key:
-        return []
+    refs: list[dict[str, Any]] = []
 
+    # --- Paso 1: Búsqueda real con Tavily ---
+    if config.tavily_api_key:
+        try:
+            tavily_results = search_literature_tavily(
+                equations, api_key=config.tavily_api_key, max_results_per_eq=3,
+            )
+            for item in tavily_results:
+                refs.append({
+                    "title": item.get("title", ""),
+                    "authors": "",
+                    "year": "",
+                    "doi": "",
+                    "key_finding": item.get("content", "")[:300],
+                    "relevance": f"Web search result (score: {item.get('score', 0):.2f})",
+                    "url": item.get("url", ""),
+                    "source": "tavily",
+                })
+        except Exception as tv_err:
+            logger.warning("tavily_search_failed", error=str(tv_err))
+
+    # --- Paso 2: Claude complementa con conocimiento académico ---
+    if not config.anthropic_api_key:
+        return refs
+
+    existing_titles = {r.get("title", "").lower() for r in refs}
     eq_text = "\n".join(f"- {eq}" for eq in equations)
 
     result = call_claude_json(
@@ -157,20 +188,22 @@ def _search_literature(
         api_key=config.anthropic_api_key,
     )
 
-    refs = result.get("refs", [])
-    # Ensure each ref has required keys
-    clean_refs: list[dict[str, Any]] = []
-    for ref in refs:
+    claude_refs = result.get("refs", [])
+    for ref in claude_refs:
         if isinstance(ref, dict) and ref.get("title"):
-            clean_refs.append({
-                "title": ref.get("title", ""),
-                "authors": ref.get("authors", ""),
-                "year": ref.get("year", ""),
-                "doi": ref.get("doi", ""),
-                "key_finding": ref.get("key_finding", ""),
-                "relevance": ref.get("relevance", ""),
-            })
-    return clean_refs
+            title_lower = ref.get("title", "").lower()
+            if title_lower not in existing_titles:
+                existing_titles.add(title_lower)
+                refs.append({
+                    "title": ref.get("title", ""),
+                    "authors": ref.get("authors", ""),
+                    "year": ref.get("year", ""),
+                    "doi": ref.get("doi", ""),
+                    "key_finding": ref.get("key_finding", ""),
+                    "relevance": ref.get("relevance", ""),
+                    "source": "claude",
+                })
+    return refs
 
 
 def _generate_hypotheses(
@@ -253,10 +286,147 @@ def _infer_task(
 
     # Fallback heurístico
     q_lower = question.lower()
-    if any(w in q_lower for w in ("predic", "estim", "regres")):
+    if any(w in q_lower for w in (
+        "predec", "predic", "predict", "regres", "estim", "valor", "cuant",
+        "numer", "continu", "precio", "cost", "amount", "quantity",
+    )):
         return "regression"
-    if any(w in q_lower for w in ("clasific", "categor", "detect")):
+    if any(w in q_lower for w in (
+        "clasific", "categor", "detect", "diagnos", "tipo", "clase", "binari",
+    )):
         return "classification"
-    if any(w in q_lower for w in ("forecast", "serie", "temporal", "tiempo")):
+    if any(w in q_lower for w in (
+        "forecast", "serie", "temporal", "tiempo", "pronostic", "tendencia",
+    )):
         return "forecasting"
     return "classification"
+
+
+# ---------------------------------------------------------------------------
+# Nodo de refinamiento de ecuaciones post-EDA
+# ---------------------------------------------------------------------------
+
+
+def refine_search_equations(state: EDAState) -> dict[str, Any]:
+    """Refina ecuaciones de búsqueda basándose en hallazgos del EDA.
+
+    Después de que el Statistician produce hallazgos_eda (correlaciones,
+    outliers, normalidad, VIF, Breusch-Pagan), este nodo usa Claude para
+    generar ecuaciones PICO mejoradas y buscar literatura adicional.
+    """
+    run_id = state["run_id"]
+    log = logger.bind(agent="refine_equations", run_id=run_id)
+    config = PipelineConfig.from_state(state)
+
+    try:
+        log.info("starting")
+        hallazgos = state.get("hallazgos_eda", {})
+        question = state["research_question"]
+        context = state.get("context", "")
+        original_eqs = state.get("search_equations", [])
+        existing_refs = state.get("refs", [])
+
+        if not hallazgos or not config.anthropic_api_key:
+            log.info("skipped", reason="no hallazgos or no API key")
+            return {}
+
+        # --- Generar ecuaciones refinadas ---
+        refined_eqs = _build_refined_equations(
+            question, context, hallazgos, original_eqs, config
+        )
+
+        if not refined_eqs:
+            log.info("no_refined_equations")
+            return {}
+
+        # --- Buscar literatura con ecuaciones refinadas ---
+        existing_titles = {r.get("title", "").lower() for r in existing_refs}
+        new_refs = _search_literature(refined_eqs, question, context, config)
+
+        # Filtrar refs duplicadas
+        unique_refs = [
+            r for r in new_refs
+            if r.get("title", "").lower() not in existing_titles
+        ]
+
+        log.info(
+            "completed",
+            n_refined_eqs=len(refined_eqs),
+            n_new_refs=len(unique_refs),
+        )
+        return {
+            "search_equations": refined_eqs,
+            "refs": unique_refs,
+        }
+
+    except Exception as e:
+        log.error("failed", error=str(e))
+        return {
+            "error_log": [{
+                "agent": "refine_equations",
+                "error": str(e),
+                "run_id": run_id,
+            }],
+        }
+
+
+def _build_refined_equations(
+    question: str,
+    context: str,
+    hallazgos: dict[str, Any],
+    original_eqs: list[str],
+    config: PipelineConfig,
+) -> list[str]:
+    """Genera ecuaciones PICO refinadas a partir de hallazgos estadísticos."""
+    import json as _json
+
+    correlations_text = _json.dumps(
+        hallazgos.get("correlations", {}), default=str
+    )[:600]
+    outliers_text = _json.dumps(
+        hallazgos.get("outliers", {}), default=str
+    )[:400]
+    normality_text = _json.dumps(
+        hallazgos.get("normality", {}), default=str
+    )[:400]
+    vif_text = _json.dumps(
+        hallazgos.get("vif_summary", {}), default=str
+    )[:200]
+    interpretation = hallazgos.get("interpretation", "")[:500]
+    original_text = "\n".join(f"- {eq}" for eq in original_eqs)
+
+    try:
+        result = call_claude_json(
+            prompt=(
+                f"Research question: {question}\n"
+                f"Context: {context}\n\n"
+                f"Original search equations:\n{original_text}\n\n"
+                "The following are ACTUAL statistical findings from the dataset:\n"
+                f"- Correlations: {correlations_text}\n"
+                f"- Outliers: {outliers_text}\n"
+                f"- Normality tests: {normality_text}\n"
+                f"- VIF (multicollinearity): {vif_text}\n"
+                f"- Interpretation: {interpretation}\n\n"
+                "Based on these real data findings, generate 3 NEW and IMPROVED "
+                "boolean PICO search equations that:\n"
+                "1. Focus on the specific variables/relationships found significant\n"
+                "2. Investigate unexpected patterns (outliers, non-normality)\n"
+                "3. Explore methodological approaches for issues found "
+                "(multicollinearity, heteroscedasticity)\n\n"
+                "The new equations must be DIFFERENT from the originals and more "
+                "targeted based on actual data evidence.\n"
+                'Return JSON: {"equations": ["eq1", "eq2", "eq3"]}'
+            ),
+            system=(
+                "You are a research methodology expert. Generate refined PICO "
+                "search equations informed by real statistical findings. "
+                "Return only valid JSON."
+            ),
+            model=config.model,
+            max_tokens=1024,
+            api_key=config.anthropic_api_key,
+        )
+        equations = result.get("equations", [])
+        return equations if equations else []
+    except Exception:
+        return []

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -43,6 +44,7 @@ class TestParseArgs:
             "--time-col", "fecha",
             "--context", "Café colombiano",
             "--resume", "abc123",
+            "--task", "regression",
             "--config", "custom.yaml",
         ]):
             args = parse_args()
@@ -52,6 +54,7 @@ class TestParseArgs:
         assert args.time_col == "fecha"
         assert args.context == "Café colombiano"
         assert args.resume == "abc123"
+        assert args.task == "regression"
         assert args.config == "custom.yaml"
 
     def test_short_flags(self) -> None:
@@ -77,6 +80,7 @@ class TestParseArgs:
 # ---------------------------------------------------------------------------
 
 
+@patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test-fake-key"})
 class TestMainEndToEnd:
     """Tests de integración para main()."""
 

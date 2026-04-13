@@ -60,7 +60,8 @@ class EDAState(TypedDict):
     refs: Annotated[list, operator.add]
     hipotesis: Optional[HipotesisModel]
     tarea_sugerida: Optional[str]
-    search_equations: list[str]
+    task_override: Optional[str]
+    search_equations: Annotated[list, operator.add]
 
     # --- Ag.2 Data Steward ---
     perfil_columnas: dict
@@ -85,6 +86,8 @@ class EDAState(TypedDict):
     breusch_pagan_result: Optional[dict]
     modelo_correccion_heterosc: Optional[str]
     vif_flags: list
+    vif_all: dict
+    feature_importance: dict
 
     # --- Ag.5 TS Analyst (condicional) ---
     modelo_ts: Optional[dict]

@@ -148,6 +148,11 @@ def build_notebook(state: dict[str, Any], output_dir: str | Path) -> Path:
         "import warnings\n"
         "warnings.filterwarnings('ignore')\n"
         "\n"
+        "# Plotly para graficas interactivas\n"
+        "import plotly.express as px\n"
+        "import plotly.graph_objects as go\n"
+        "from plotly.subplots import make_subplots\n"
+        "\n"
         "# Configuracion de visualizacion\n"
         "plt.rcParams['figure.figsize'] = (10, 6)\n"
         "plt.rcParams['figure.dpi'] = 100\n"
@@ -250,96 +255,314 @@ def build_notebook(state: dict[str, Any], output_dir: str | Path) -> Path:
     cells.append(_cell_markdown("## 6. Analisis Exploratorio Estadistico"))
 
     cells.append(_cell_code(
-        "# Correlaciones\n"
+        "# Correlaciones (Spearman - robusta a no-linealidad)\n"
         "numeric_df = df_train.select_dtypes(include=[np.number])\n"
         "if len(numeric_df.columns) >= 2:\n"
-        "    corr = numeric_df.corr()\n"
-        "    fig, ax = plt.subplots(figsize=(10, 8))\n"
-        "    sns.heatmap(corr, annot=True, fmt='.2f', cmap='coolwarm', ax=ax)\n"
-        "    ax.set_title('Matriz de Correlaciones')\n"
-        "    plt.tight_layout()\n"
-        "    plt.show()\n"
+        "    corr = numeric_df.corr(method='spearman')\n"
+        "    fig = px.imshow(corr, text_auto='.2f', color_continuous_scale='RdBu_r',\n"
+        "                    zmin=-1, zmax=1, title='Matriz de Correlaciones (Spearman)')\n"
+        "    fig.update_layout(width=800, height=700)\n"
+        "    fig.show()\n"
         "else:\n"
         "    print('Menos de 2 columnas numericas para correlacion.')"
     ))
 
     cells.append(_cell_code(
-        "# Distribuciones de variables numericas\n"
+        "# Distribuciones de variables numericas (interactivo)\n"
         "numeric_cols = numeric_df.columns.tolist()\n"
         "n_cols = len(numeric_cols)\n"
         "if n_cols > 0:\n"
-        "    fig, axes = plt.subplots(1, min(n_cols, 4), figsize=(5*min(n_cols, 4), 4))\n"
-        "    if n_cols == 1:\n"
-        "        axes = [axes]\n"
-        "    for i, col in enumerate(numeric_cols[:4]):\n"
-        "        axes[i].hist(df_train[col].dropna(), bins=30, edgecolor='black', alpha=0.7)\n"
-        "        axes[i].set_title(f'Dist: {col}')\n"
-        "    plt.tight_layout()\n"
-        "    plt.show()"
+        "    cols_to_plot = numeric_cols[:8]\n"
+        "    n = len(cols_to_plot)\n"
+        "    rows = (n + 1) // 2\n"
+        "    fig = make_subplots(rows=rows, cols=2, subplot_titles=cols_to_plot)\n"
+        "    for i, col in enumerate(cols_to_plot):\n"
+        "        r, c = i // 2 + 1, i % 2 + 1\n"
+        "        fig.add_trace(go.Histogram(x=df_train[col].dropna(), name=col,\n"
+        "                                    nbinsx=30, showlegend=False), row=r, col=c)\n"
+        "    fig.update_layout(title='Distribuciones Numericas', height=300*rows, width=900)\n"
+        "    fig.show()"
     ))
 
     cells.append(_cell_code(
-        "# Boxplots\n"
+        "# Boxplots interactivos\n"
         "if n_cols > 0:\n"
-        "    fig, axes = plt.subplots(1, min(n_cols, 4), figsize=(5*min(n_cols, 4), 4))\n"
-        "    if n_cols == 1:\n"
-        "        axes = [axes]\n"
-        "    for i, col in enumerate(numeric_cols[:4]):\n"
-        "        axes[i].boxplot(df_train[col].dropna(), patch_artist=True)\n"
-        "        axes[i].set_title(f'Box: {col}')\n"
-        "    plt.tight_layout()\n"
-        "    plt.show()"
+        "    cols_to_box = numeric_cols[:8]\n"
+        "    fig = go.Figure()\n"
+        "    for col in cols_to_box:\n"
+        "        fig.add_trace(go.Box(y=df_train[col].dropna(), name=col))\n"
+        "    fig.update_layout(title='Boxplots', height=500, width=900, showlegend=False)\n"
+        "    fig.show()"
     ))
 
     if target and target != "N/A":
         cells.append(_cell_code(
-            f"# Distribucion del target\n"
+            f"# Distribucion del target (interactivo)\n"
             f"if '{target}' in df_train.columns:\n"
-            f"    fig, ax = plt.subplots(figsize=(8, 5))\n"
             f"    if pd.api.types.is_numeric_dtype(df_train['{target}']) and df_train['{target}'].nunique() > 10:\n"
-            f"        ax.hist(df_train['{target}'].dropna(), bins=30, edgecolor='black', alpha=0.7, color='coral')\n"
-            f"        ax.set_title('Distribucion del target: {target}')\n"
+            f"        fig = px.histogram(df_train, x='{target}', nbins=30,\n"
+            f"                            title='Distribucion del target: {target}',\n"
+            f"                            color_discrete_sequence=['coral'])\n"
             f"    else:\n"
-            f"        df_train['{target}'].value_counts().plot(kind='bar', ax=ax, color='coral', edgecolor='black')\n"
-            f"        ax.set_title('Distribucion de clases: {target}')\n"
-            f"    plt.tight_layout()\n"
-            f"    plt.show()"
+            f"        vc = df_train['{target}'].value_counts().reset_index()\n"
+            f"        vc.columns = ['{target}', 'count']\n"
+            f"        fig = px.bar(vc, x='{target}', y='count',\n"
+            f"                     title='Distribucion de clases: {target}',\n"
+            f"                     color_discrete_sequence=['coral'])\n"
+            f"    fig.update_layout(height=500, width=800)\n"
+            f"    fig.show()"
         ))
 
     cells.append(_cell_code(
-        "# Pairplot (top-6 numericas)\n"
+        "# Scatter Matrix (top-6 numericas, interactivo)\n"
         "pair_cols = numeric_cols[:6]\n"
         "if len(pair_cols) >= 2:\n"
         "    pair_df = df_train[pair_cols].dropna()\n"
         "    if len(pair_df) > 500:\n"
         "        pair_df = pair_df.sample(500, random_state=RANDOM_SEED)\n"
-        "    g = sns.pairplot(pair_df, diag_kind='kde', plot_kws={'alpha': 0.5, 's': 15})\n"
-        "    g.figure.suptitle('Pairplot Top-6', y=1.02)\n"
-        "    plt.show()"
+        "    fig = px.scatter_matrix(pair_df, dimensions=pair_cols,\n"
+        "                             title='Scatter Matrix Top-6')\n"
+        "    fig.update_layout(height=800, width=900)\n"
+        "    fig.update_traces(diagonal_visible=True, marker=dict(size=3, opacity=0.5))\n"
+        "    fig.show()"
     ))
+
+    # ======================== 6b. FEATURE IMPORTANCE ========================
+    feat_imp = state.get("feature_importance", {})
+    if feat_imp:
+        cells.append(_cell_markdown(
+            "## 6b. Feature Importance\n"
+            "\n"
+            "Importancia de variables calculada con Mutual Information y Permutation Importance."
+        ))
+
+        mi_scores = feat_imp.get("mutual_information", {})
+        perm_scores = feat_imp.get("permutation_importance", {})
+        top_feats = feat_imp.get("top_features", [])
+
+        if mi_scores:
+            mi_json = json.dumps(mi_scores, indent=2, ensure_ascii=False, default=str)
+            cells.append(_cell_code(
+                f"# Mutual Information\n"
+                f"mi_scores = json.loads('''{mi_json}''')\n"
+                f"mi_df = pd.DataFrame({{'feature': list(mi_scores.keys()), 'MI': list(mi_scores.values())}})\n"
+                f"mi_df = mi_df.sort_values('MI', ascending=True)\n"
+                f"\n"
+                f"fig = go.Figure(go.Bar(x=mi_df['MI'], y=mi_df['feature'], orientation='h',\n"
+                f"                        marker_color='steelblue'))\n"
+                f"fig.update_layout(title='Mutual Information Scores', xaxis_title='MI Score',\n"
+                f"                  height=max(300, len(mi_df)*25), width=800)\n"
+                f"fig.show()"
+            ))
+
+        if perm_scores:
+            perm_json = json.dumps(perm_scores, indent=2, ensure_ascii=False, default=str)
+            cells.append(_cell_code(
+                f"# Permutation Importance\n"
+                f"perm_scores = json.loads('''{perm_json}''')\n"
+                f"perm_df = pd.DataFrame([\n"
+                f"    {{'feature': k, 'mean': v['mean'], 'std': v['std']}}\n"
+                f"    for k, v in perm_scores.items()\n"
+                f"])\n"
+                f"perm_df = perm_df.sort_values('mean', ascending=True)\n"
+                f"\n"
+                f"fig = go.Figure(go.Bar(x=perm_df['mean'], y=perm_df['feature'], orientation='h',\n"
+                f"                        error_x=dict(type='data', array=perm_df['std']),\n"
+                f"                        marker_color='darkorange'))\n"
+                f"fig.update_layout(title='Permutation Importance', xaxis_title='Importance',\n"
+                f"                  height=max(300, len(perm_df)*25), width=800)\n"
+                f"fig.show()"
+            ))
+
+        if top_feats:
+            cells.append(_cell_code(
+                f"# Top features seleccionadas\n"
+                f"top_features = {top_feats}\n"
+                f"print('Top features seleccionadas por average rank:')\n"
+                f"for i, f in enumerate(top_features, 1):\n"
+                f"    print(f'  {{i}}. {{f}}')"
+            ))
+
+    # ======================== 6c. VIF — Multicolinealidad ========================
+    vif_all = state.get("vif_all", {})
+    if not vif_all:
+        vif_all = state.get("hallazgos_eda", {}).get("vif_all", {})
+    if vif_all:
+        vif_json = json.dumps(vif_all, indent=2, ensure_ascii=False, default=str)
+        cells.append(_cell_markdown(
+            "## 6c. VIF — Factor de Inflación de Varianza\n"
+            "\n"
+            "Valores VIF > 10 indican multicolinealidad severa."
+        ))
+        cells.append(_cell_code(
+            f"# VIF (Factor de Inflacion de Varianza)\n"
+            f"vif_data = json.loads('''{vif_json}''')\n"
+            f"vif_df = pd.DataFrame({{'feature': list(vif_data.keys()), 'VIF': list(vif_data.values())}})\n"
+            f"vif_df = vif_df.sort_values('VIF', ascending=True)\n"
+            f"vif_df['VIF_capped'] = vif_df['VIF'].clip(upper=100)  # limitar para visualizacion\n"
+            f"\n"
+            f"colors = ['#e74c3c' if v > 10 else '#f39c12' if v > 5 else '#27ae60' for v in vif_df['VIF']]\n"
+            f"fig = go.Figure(go.Bar(x=vif_df['VIF_capped'], y=vif_df['feature'], orientation='h',\n"
+            f"                        marker_color=colors))\n"
+            f"fig.add_vline(x=10, line_dash='dash', line_color='red', annotation_text='Umbral VIF=10')\n"
+            f"fig.add_vline(x=5, line_dash='dot', line_color='orange', annotation_text='VIF=5')\n"
+            f"fig.update_layout(title='VIF — Factor de Inflación de Varianza',\n"
+            f"                  xaxis_title='VIF', template='plotly_white',\n"
+            f"                  height=max(400, len(vif_df)*30), width=800)\n"
+            f"fig.show()\n"
+            f"\n"
+            f"# Resumen\n"
+            f"n_high = sum(1 for v in vif_data.values() if v > 10)\n"
+            f"print(f'Variables con VIF > 10 (multicolinealidad alta): {{n_high}}')\n"
+            f"for feat, vif_val in sorted(vif_data.items(), key=lambda x: x[1], reverse=True):\n"
+            f"    flag = ' ⚠ ALTA' if vif_val > 10 else ' ⚡ moderada' if vif_val > 5 else ''\n"
+            f"    print(f'  {{feat}}: {{vif_val:.2f}}{{flag}}')"
+        ))
+
+    # ======================== 6d. Normalidad (Q-Q Plots) ========================
+    normality = state.get("hallazgos_eda", {}).get("normality", {})
+    if normality:
+        norm_json = json.dumps(normality, indent=2, ensure_ascii=False, default=str)
+        cells.append(_cell_markdown(
+            "## 6d. Test de Normalidad (Q-Q Plots)\n"
+            "\n"
+            "Evaluación de normalidad de variables numéricas con Shapiro-Wilk / Anderson-Darling."
+        ))
+        cells.append(_cell_code(
+            f"from scipy import stats as sp_stats\n"
+            f"\n"
+            f"normality_results = json.loads('''{norm_json}''')\n"
+            f"\n"
+            f"# Tabla de resultados\n"
+            f"print('=== Test de Normalidad ===')\n"
+            f"for col, info in normality_results.items():\n"
+            f"    test = info.get('test', 'shapiro')\n"
+            f"    stat = info.get('statistic', 0)\n"
+            f"    pval = info.get('p_value')\n"
+            f"    normal = 'Si' if info.get('normal') else 'No'\n"
+            f"    if pval is not None:\n"
+            f"        print(f'  {{col}}: {{normal}} (test={{test}}, stat={{stat:.4f}}, p={{pval:.4f}})')\n"
+            f"    else:\n"
+            f"        print(f'  {{col}}: test={{test}}, stat={{stat:.4f}}')"
+        ))
+        cells.append(_cell_code(
+            "# Q-Q Plots\n"
+            "norm_cols = [c for c in normality_results.keys() if c in df_train.columns][:6]\n"
+            "n_norm = len(norm_cols)\n"
+            "if n_norm > 0:\n"
+            "    rows_n = (n_norm + 1) // 2\n"
+            "    fig = make_subplots(rows=rows_n, cols=2,\n"
+            "                        subplot_titles=[f'Q-Q: {c}' for c in norm_cols])\n"
+            "    for i, col in enumerate(norm_cols):\n"
+            "        clean = df_train[col].dropna().values\n"
+            "        if len(clean) < 8:\n"
+            "            continue\n"
+            "        theoretical_q = sp_stats.norm.ppf(np.linspace(0.01, 0.99, min(len(clean), 200)))\n"
+            "        sample = np.sort(np.random.choice(clean, size=min(len(clean), 200), replace=False))\n"
+            "        sample_q = (sample - np.mean(clean)) / (np.std(clean) + 1e-12)\n"
+            "        r, c_ = i // 2 + 1, i % 2 + 1\n"
+            "        fig.add_trace(go.Scatter(x=theoretical_q, y=sample_q, mode='markers',\n"
+            "                                  name=col, marker=dict(size=4, opacity=0.6),\n"
+            "                                  showlegend=False), row=r, col=c_)\n"
+            "        fig.add_trace(go.Scatter(x=[-3, 3], y=[-3, 3], mode='lines',\n"
+            "                                  line=dict(color='red', dash='dash'),\n"
+            "                                  showlegend=False), row=r, col=c_)\n"
+            "    fig.update_layout(title_text='Q-Q Plots — Test de Normalidad',\n"
+            "                      height=300*rows_n, template='plotly_white')\n"
+            "    fig.show()"
+        ))
+
+    # ======================== 6e. Breusch-Pagan ========================
+    bp_result = state.get("breusch_pagan_result")
+    if bp_result and not bp_result.get("error"):
+        bp_json = json.dumps(bp_result, indent=2, ensure_ascii=False, default=str)
+        correccion_sugerida = state.get("modelo_correccion_heterosc", "HC3")
+        cells.append(_cell_markdown(
+            "## 6e. Test de Breusch-Pagan — Heteroscedasticidad\n"
+            "\n"
+            "Evalúa si los residuos del modelo de regresión tienen varianza constante."
+        ))
+        cells.append(_cell_code(
+            f"bp_result = json.loads('''{bp_json}''')\n"
+            f"\n"
+            f"print('=== Test de Breusch-Pagan ===')\n"
+            "print(f'  BP Statistic: {bp_result[\"bp_statistic\"]:.4f}')\n"
+            "print(f'  BP p-valor:   {bp_result[\"bp_pvalue\"]:.4f}')\n"
+            "print(f'  F Statistic:  {bp_result[\"f_statistic\"]:.4f}')\n"
+            "print(f'  F p-valor:    {bp_result[\"f_pvalue\"]:.4f}')\n"
+            "print()\n"
+            "if bp_result['heteroscedastic']:\n"
+            "    print('⚠ Se detectó HETEROSCEDASTICIDAD (p < 0.05).')\n"
+            "    print('  Los errores estándar OLS pueden ser sesgados.')\n"
+            f"    print('  Corrección sugerida: {correccion_sugerida}')\n"
+            "else:\n"
+            "    print('✓ No se detectó heteroscedasticidad (homoscedasticidad).')\n"
+            "    print('  Los errores estándar OLS son válidos.')"
+        ))
+        # Residual plot
+        if target and target != "N/A":
+            cells.append(_cell_code(
+                f"# Gráfico de residuos vs ajustados\n"
+                f"import statsmodels.api as sm_api\n"
+                f"\n"
+                f"features_bp = [c for c in df_train.select_dtypes(include=[np.number]).columns if c != '{target}'][:10]\n"
+                f"clean = df_train[['{target}'] + features_bp].dropna()\n"
+                f"if len(clean) > 20:\n"
+                f"    y = clean['{target}'].values\n"
+                f"    X = sm_api.add_constant(clean[features_bp].values)\n"
+                f"    ols = sm_api.OLS(y, X).fit()\n"
+                f"    residuals = ols.resid\n"
+                f"    fitted = ols.fittedvalues\n"
+                f"    hetero_lbl = 'Heteroscedástico' if bp_result['heteroscedastic'] else 'Homoscedástico'\n"
+                f"    fig = go.Figure()\n"
+                f"    fig.add_trace(go.Scatter(x=fitted, y=residuals, mode='markers',\n"
+                f"                              marker=dict(size=4, opacity=0.5, color='#3498db'),\n"
+                f"                              name='Residuos'))\n"
+                f"    fig.add_hline(y=0, line_dash='dash', line_color='red')\n"
+                f"    fig.update_layout(title=f'Residuos vs Ajustados ({{hetero_lbl}})',\n"
+                f"                      xaxis_title='Valores ajustados', yaxis_title='Residuos',\n"
+                f"                      template='plotly_white', height=500, width=800)\n"
+                f"    fig.show()"
+            ))
 
     # ======================== 7. HALLAZGOS ========================
     cells.append(_cell_markdown("## 7. Hallazgos del Pipeline"))
+
+    # Interpretación
+    interp = hallazgos.get("interpretation", "")
+    if interp:
+        cells.append(_cell_markdown(
+            f"### Interpretación General\n\n{interp}"
+        ))
+
     cells.append(_cell_code(
         f"hallazgos = json.loads('''{hallazgos_json}''')\n"
         f"\n"
-        f"# Correlaciones encontradas\n"
+        f"# Correlaciones significativas (|r| > 0.5)\n"
         f"if 'correlations' in hallazgos:\n"
-        f"    print('=== Correlaciones ===')\n"
-        f"    print(json.dumps(hallazgos['correlations'], indent=2))\n"
+        f"    spearman = hallazgos['correlations'].get('spearman', {{}})\n"
+        f"    print('=== Correlaciones Significativas (|r| > 0.5) ===')\n"
+        f"    seen = set()\n"
+        f"    for row_name, row_vals in spearman.items():\n"
+        f"        for col_name, val in row_vals.items():\n"
+        f"            if row_name == col_name:\n"
+        f"                continue\n"
+        f"            pair = tuple(sorted((row_name, col_name)))\n"
+        f"            if pair in seen:\n"
+        f"                continue\n"
+        f"            seen.add(pair)\n"
+        f"            if abs(val) > 0.5:\n"
+        f"                direction = 'positiva' if val > 0 else 'negativa'\n"
+        f"                print(f'  {{row_name}} <-> {{col_name}}: r={{val:.3f}} ({{direction}})')\n"
         f"\n"
         f"# Outliers\n"
         f"if 'outliers' in hallazgos:\n"
-        f"    print('\\n=== Outliers ===')\n"
+        f"    print('\\n=== Outliers (IQR 1.5x) ===')\n"
         f"    for col, info in hallazgos['outliers'].items():\n"
-        f"        print(f'  {{col}}: {{info.get(\"n_outliers\", 0)}} outliers ({{info.get(\"pct\", 0):.1f}}%)')\n"
-        f"\n"
-        f"# Normalidad\n"
-        f"if 'normality' in hallazgos:\n"
-        f"    print('\\n=== Test de Normalidad ===')\n"
-        f"    for col, info in hallazgos['normality'].items():\n"
-        f"        normal = 'Si' if info.get('normal') else 'No'\n"
-        f"        print(f'  {{col}}: {{normal}} (p={{info.get(\"p_value\", 0):.4f}})')"
+        f"        n_out = info.get('n_outliers', 0)\n"
+        f"        pct = info.get('pct', 0)\n"
+        f"        flag = ' ⚠' if pct > 5 else ''\n"
+        f"        print(f'  {{col}}: {{n_out}} outliers ({{pct:.1f}}%){{flag}}')"
     ))
 
     # ======================== 8. DECISION ========================
@@ -362,7 +585,8 @@ def build_notebook(state: dict[str, Any], output_dir: str | Path) -> Path:
     if fig_paths:
         cells.append(_cell_markdown("## 9. Figuras Generadas por el Pipeline"))
         cells.append(_cell_code(
-            "from IPython.display import Image, display\n"
+            "from IPython.display import Image, HTML, display\n"
+            "from pathlib import Path as _Path\n"
             "\n"
             "# Mostrar figuras generadas por el pipeline\n"
             "figuras = [\n" +
@@ -372,7 +596,11 @@ def build_notebook(state: dict[str, Any], output_dir: str | Path) -> Path:
             "for path, desc in figuras:\n"
             "    try:\n"
             "        print(f'--- {desc} ---')\n"
-            "        display(Image(filename=path))\n"
+            "        p = _Path(path)\n"
+            "        if p.suffix == '.html':\n"
+            "            display(HTML(p.read_text(encoding='utf-8')))\n"
+            "        else:\n"
+            "            display(Image(filename=path))\n"
             "    except Exception as e:\n"
             "        print(f'No se pudo cargar {path}: {e}')"
         ))

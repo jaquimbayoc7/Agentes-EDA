@@ -7,6 +7,8 @@ Arquitectura:
            ↓ split condicional
            [statistician, ts_analyst*]       ← PARALELO (* si flag_timeseries)
            ↓ barrera
+           refine_equations                  ← refina PICO con hallazgos EDA
+           ↓
            ml_strategist
            ↓
            re_encoder                        ← nodo Python puro
@@ -27,7 +29,7 @@ import pandas as pd
 import structlog
 from langgraph.graph import END, START, StateGraph
 
-from src.agents.agent_01_research_lead import research_lead
+from src.agents.agent_01_research_lead import research_lead, refine_search_equations
 from src.agents.agent_02_data_steward import data_steward
 from src.agents.agent_03_data_engineer import data_engineer
 from src.agents.agent_04_statistician import statistician
@@ -37,8 +39,19 @@ from src.agents.agent_07_viz_designer import viz_designer
 from src.agents.agent_08_technical_writer import technical_writer
 from src.skills.encoding import reencode_column
 from src.state import EDAState
+from src.utils.sanitize import sanitize_state
 
 logger = structlog.get_logger()
+
+
+def _safe_node(fn):
+    """Wrapper que sanitiza el output de un nodo para eliminar tipos numpy."""
+    def wrapper(state):
+        result = fn(state)
+        return sanitize_state(result)
+    wrapper.__name__ = fn.__name__
+    wrapper.__qualname__ = fn.__qualname__
+    return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -193,17 +206,18 @@ def build_graph(checkpointer: Any = None) -> StateGraph:
     """
     builder = StateGraph(EDAState)
 
-    # --- Registrar nodos ---
-    builder.add_node("research_lead", research_lead)
-    builder.add_node("data_steward", data_steward)
-    builder.add_node("data_engineer", data_engineer)
-    builder.add_node("statistician", statistician)
-    builder.add_node("ts_analyst", ts_analyst)
-    builder.add_node("ml_strategist", ml_strategist)
-    builder.add_node("re_encoder", re_encoder)
-    builder.add_node("viz_designer", viz_designer)
-    builder.add_node("technical_writer", technical_writer)
-    builder.add_node("abort", _abort_node)
+    # --- Registrar nodos (envueltos con _safe_node para serialización) ---
+    builder.add_node("research_lead", _safe_node(research_lead))
+    builder.add_node("data_steward", _safe_node(data_steward))
+    builder.add_node("data_engineer", _safe_node(data_engineer))
+    builder.add_node("statistician", _safe_node(statistician))
+    builder.add_node("ts_analyst", _safe_node(ts_analyst))
+    builder.add_node("refine_equations", _safe_node(refine_search_equations))
+    builder.add_node("ml_strategist", _safe_node(ml_strategist))
+    builder.add_node("re_encoder", _safe_node(re_encoder))
+    builder.add_node("viz_designer", _safe_node(viz_designer))
+    builder.add_node("technical_writer", _safe_node(technical_writer))
+    builder.add_node("abort", _safe_node(_abort_node))
 
     # --- Paralelo inicial: research_lead + data_steward ---
     builder.add_edge(START, "research_lead")
@@ -222,9 +236,12 @@ def build_graph(checkpointer: Any = None) -> StateGraph:
         ["statistician", "ts_analyst"],
     )
 
-    # --- Barrera 2: statistician (+ ts_analyst si aplica) → ml_strategist ---
-    builder.add_edge("statistician", "ml_strategist")
-    builder.add_edge("ts_analyst", "ml_strategist")
+    # --- Barrera 2: statistician (+ ts_analyst si aplica) → refine_equations ---
+    builder.add_edge("statistician", "refine_equations")
+    builder.add_edge("ts_analyst", "refine_equations")
+
+    # --- refine_equations → ml_strategist ---
+    builder.add_edge("refine_equations", "ml_strategist")
 
     # --- Secuencial: ml_strategist → re_encoder → viz_designer → writer → END ---
     builder.add_edge("ml_strategist", "re_encoder")

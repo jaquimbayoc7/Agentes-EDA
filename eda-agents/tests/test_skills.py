@@ -149,10 +149,14 @@ def numeric_df() -> pd.DataFrame:
 
 
 class TestComputeCorrelations:
-    def test_returns_pearson(self, numeric_df: pd.DataFrame) -> None:
+    def test_returns_spearman_default(self, numeric_df: pd.DataFrame) -> None:
         res = compute_correlations(numeric_df, ["x1", "x2", "x3"])
+        assert "spearman" in res
+        assert "x1" in res["spearman"]
+
+    def test_explicit_pearson(self, numeric_df: pd.DataFrame) -> None:
+        res = compute_correlations(numeric_df, ["x1", "x2"], methods=["pearson"])
         assert "pearson" in res
-        assert "x1" in res["pearson"]
 
     def test_multiple_methods(self, numeric_df: pd.DataFrame) -> None:
         res = compute_correlations(numeric_df, ["x1", "x2"], methods=["pearson", "spearman"])

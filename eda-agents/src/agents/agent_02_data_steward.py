@@ -106,11 +106,18 @@ def _build_column_profile(df: pd.DataFrame, config: PipelineConfig) -> dict[str,
     """Genera perfil de columnas (profiling simplificado)."""
     profile: dict[str, Any] = {}
     for col in df.columns:
+        raw_samples = df[col].dropna().head(5).tolist()
+        safe_samples = [
+            int(v) if isinstance(v, (np.integer,)) else
+            float(v) if isinstance(v, (np.floating,)) else
+            bool(v) if isinstance(v, (np.bool_,)) else v
+            for v in raw_samples
+        ]
         col_info: dict[str, Any] = {
             "dtype": str(df[col].dtype),
             "n_unique": int(df[col].nunique()),
             "null_pct": float(df[col].isna().mean() * 100),
-            "sample_values": df[col].dropna().head(5).tolist(),
+            "sample_values": safe_samples,
         }
         if pd.api.types.is_numeric_dtype(df[col]):
             col_info["mean"] = float(df[col].mean())

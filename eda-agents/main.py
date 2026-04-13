@@ -71,6 +71,12 @@ def parse_args() -> argparse.Namespace:
         help="run_id para reanudar una ejecución previa",
     )
     parser.add_argument(
+        "--task",
+        choices=["regression", "classification", "forecasting", "auto"],
+        default="auto",
+        help="Tipo de tarea ML (default: auto = inferir)",
+    )
+    parser.add_argument(
         "--config",
         default=None,
         help="Ruta a pipeline.yaml personalizado",
@@ -92,6 +98,15 @@ def main() -> None:
 
     # --- Cargar config ---
     config = PipelineConfig.load(args.config)
+
+    # --- Validar API key ---
+    if not config.anthropic_api_key:
+        log.error("missing_api_key")
+        print("\n  [FAIL] ANTHROPIC_API_KEY no configurada.")
+        print("  Crea un archivo .env en la raiz del proyecto con:")
+        print("    ANTHROPIC_API_KEY=sk-ant-...")
+        print("  O exportala como variable de entorno.\n")
+        sys.exit(1)
 
     # --- Validar dataset ---
     dataset_path = Path(args.dataset)
@@ -120,6 +135,7 @@ def main() -> None:
         "refs": [],
         "hipotesis": None,
         "tarea_sugerida": None,
+        "task_override": args.task if args.task != "auto" else None,
         "search_equations": [],
         "perfil_columnas": {},
         "nulos_pct": {},
@@ -139,6 +155,7 @@ def main() -> None:
         "breusch_pagan_result": None,
         "modelo_correccion_heterosc": None,
         "vif_flags": [],
+        "feature_importance": {},
         "modelo_ts": None,
         "params_pdq": None,
         "diagnostico_residuos_ts": None,

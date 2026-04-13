@@ -161,8 +161,8 @@ class TestBuildGraph:
         expected = {
             "research_lead", "data_steward", "data_engineer",
             "statistician", "ts_analyst", "ml_strategist",
-            "re_encoder", "viz_designer", "technical_writer",
-            "abort", "__start__", "__end__",
+            "refine_equations", "re_encoder", "viz_designer",
+            "technical_writer", "abort", "__start__", "__end__",
         }
         assert expected.issubset(node_ids), f"Missing nodes: {expected - node_ids}"
 

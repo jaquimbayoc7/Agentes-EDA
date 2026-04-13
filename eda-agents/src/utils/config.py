@@ -59,6 +59,7 @@ class PipelineConfig:
 
     # API keys (cargadas desde .env)
     anthropic_api_key: str = ""
+    tavily_api_key: str = ""
 
     @classmethod
     def load(cls, config_path: Path | str | None = None) -> PipelineConfig:
@@ -86,6 +87,7 @@ class PipelineConfig:
             encoding=encoding,
             split=split,
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+            tavily_api_key=os.getenv("TAVILY_API_KEY", ""),
         )
 
     @classmethod
@@ -104,4 +106,5 @@ class PipelineConfig:
             encoding=config.encoding,
             split=config.split,
             anthropic_api_key=config.anthropic_api_key,
+            tavily_api_key=config.tavily_api_key,
         )

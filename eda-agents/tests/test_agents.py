@@ -97,6 +97,21 @@ class TestAgent01:
         assert _infer_task("clasificar pacientes", [], mock_config_no_key) == "classification"
         assert _infer_task("forecast de ventas", [], mock_config_no_key) == "forecasting"
 
+    def test_task_heuristic_predecir_spanish(self, base_state, mock_config_no_key):
+        from src.agents.agent_01_research_lead import _infer_task
+
+        assert _infer_task("predecir residual sugar", [], mock_config_no_key) == "regression"
+        assert _infer_task("estimar el valor de venta", [], mock_config_no_key) == "regression"
+        assert _infer_task("pronosticar tendencia", [], mock_config_no_key) == "forecasting"
+        assert _infer_task("diagnosticar enfermedad", [], mock_config_no_key) == "classification"
+
+    def test_task_override_from_cli(self, base_state, mock_config_no_key):
+        from src.agents.agent_01_research_lead import research_lead
+
+        base_state["task_override"] = "regression"
+        result = research_lead(base_state)
+        assert result["tarea_sugerida"] == "regression"
+
 
 # ---------------------------------------------------------------------------
 # Agent 02 — Data Steward
@@ -297,6 +312,91 @@ class TestAgent06:
 
 
 # ---------------------------------------------------------------------------
+# Refine Search Equations (post-EDA feedback loop)
+# ---------------------------------------------------------------------------
+
+
+class TestRefineSearchEquations:
+    def test_skips_without_hallazgos(self, base_state, mock_config_no_key):
+        from src.agents.agent_01_research_lead import refine_search_equations
+
+        base_state["hallazgos_eda"] = {}
+        result = refine_search_equations(base_state)
+        assert result == {}
+
+    def test_skips_without_api_key(self, base_state, mock_config_no_key):
+        from src.agents.agent_01_research_lead import refine_search_equations
+
+        base_state["hallazgos_eda"] = {"correlations": {"a_b": 0.8}}
+        result = refine_search_equations(base_state)
+        assert result == {}
+
+    @patch("src.agents.agent_01_research_lead.call_claude_json")
+    def test_refine_with_claude(self, mock_claude, base_state, mock_config_with_key):
+        mock_claude.side_effect = [
+            {"equations": ["refined_eq1 AND statistical", "refined_eq2 OR correlation"]},
+            {"refs": [
+                {"title": "New Study on Correlations", "authors": "Jones et al.",
+                 "year": "2023", "doi": "", "key_finding": "Strong correlation",
+                 "relevance": "Confirms EDA findings"}
+            ]},
+        ]
+
+        from src.agents.agent_01_research_lead import refine_search_equations
+
+        base_state["hallazgos_eda"] = {
+            "correlations": {"feature_num_target": 0.85},
+            "outliers": {"feature_num": 5},
+            "normality": {"feature_num": {"normal": False}},
+            "vif_summary": {"n_flagged": 0},
+            "interpretation": "Strong correlation between feature_num and target.",
+        }
+        base_state["search_equations"] = ["original eq1", "original eq2"]
+        base_state["refs"] = [{"title": "Existing Study", "authors": "Smith"}]
+
+        result = refine_search_equations(base_state)
+        assert len(result["search_equations"]) == 2
+        assert "refined_eq1" in result["search_equations"][0]
+        assert len(result["refs"]) == 1
+        assert result["refs"][0]["title"] == "New Study on Correlations"
+
+    @patch("src.agents.agent_01_research_lead.call_claude_json")
+    def test_deduplicates_refs(self, mock_claude, base_state, mock_config_with_key):
+        mock_claude.side_effect = [
+            {"equations": ["eq_refined"]},
+            {"refs": [
+                {"title": "Existing Study", "authors": "Smith",
+                 "year": "2020", "doi": "", "key_finding": "Duplicate",
+                 "relevance": "Already found"},
+                {"title": "Brand New Finding", "authors": "Lee",
+                 "year": "2024", "doi": "", "key_finding": "Novel",
+                 "relevance": "New insight"},
+            ]},
+        ]
+
+        from src.agents.agent_01_research_lead import refine_search_equations
+
+        base_state["hallazgos_eda"] = {"correlations": {"a_b": 0.5}, "interpretation": "Test"}
+        base_state["refs"] = [{"title": "Existing Study", "authors": "Smith"}]
+
+        result = refine_search_equations(base_state)
+        # Only the non-duplicate should be returned
+        assert len(result["refs"]) == 1
+        assert result["refs"][0]["title"] == "Brand New Finding"
+
+    @patch("src.agents.agent_01_research_lead.call_claude_json")
+    def test_handles_claude_error_gracefully(self, mock_claude, base_state, mock_config_with_key):
+        mock_claude.side_effect = Exception("API error")
+
+        from src.agents.agent_01_research_lead import refine_search_equations
+
+        base_state["hallazgos_eda"] = {"correlations": {"a_b": 0.5}, "interpretation": "Test"}
+        result = refine_search_equations(base_state)
+        # Graceful degradation: no refined equations → empty dict, no crash
+        assert result == {}
+
+
+# ---------------------------------------------------------------------------
 # Agent 07 — Viz Designer
 # ---------------------------------------------------------------------------
 
@@ -324,7 +424,7 @@ class TestAgent07:
 
         result = viz_designer(base_state)
         fig_names = [f["name"] for f in result["figures"]]
-        assert any(n.startswith("box_") for n in fig_names)
+        assert any("boxplot" in n for n in fig_names)
 
     def test_viz_includes_target_dist(self, base_state, mock_config_no_key, tmp_path):
         from src.agents.agent_07_viz_designer import viz_designer
@@ -336,7 +436,7 @@ class TestAgent07:
 
         result = viz_designer(base_state)
         fig_names = [f["name"] for f in result["figures"]]
-        assert "target_dist.png" in fig_names
+        assert any("target_dist" in n for n in fig_names)
 
     def test_no_dataset_fallback(self, base_state, mock_config_no_key):
         from src.agents.agent_07_viz_designer import viz_designer

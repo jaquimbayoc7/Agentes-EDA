@@ -2,9 +2,12 @@
 
 Produce un archivo HTML auto-contenido con:
 - Navegacion lateral por secciones
-- Figuras embebidas en base64
+- Figuras embebidas en base64 con export 400 DPI
 - Tablas interactivas (ordennbles)
 - Tema claro/oscuro
+- Hallazgos EDA formateados (no JSON)
+- VIF, Breusch-Pagan, Normalidad secciones dedicadas
+- Botones de descarga para train/test datasets
 - decision.json renderizado
 
 Usada como post-procesamiento en main.py despues del pipeline.
@@ -31,30 +34,59 @@ def _encode_image_base64(path: str) -> str:
 
 
 def _build_figures_html(figures: list[dict], output_dir: Path) -> str:
-    """Genera HTML con todas las figuras embebidas."""
+    """Genera HTML con todas las figuras embebidas (PNG base64 + Plotly iframe) + export 400 DPI."""
     if not figures:
         return "<p>No se generaron figuras.</p>"
     cards: list[str] = []
+    fig_idx = 0
     for fig in figures:
         fig_path = fig.get("path", "")
+        fmt = fig.get("format", "png")
         if not fig_path:
             continue
-        # Intentar ruta absoluta o relativa al output_dir
+
+        desc = fig.get("description", fig.get("name", ""))
+
+        if fmt == "html":
+            # Embed Plotly HTML inline via iframe srcdoc
+            p = Path(fig_path)
+            if not p.is_absolute():
+                p = output_dir / fig_path
+            if not p.exists():
+                p = output_dir / "figures" / fig.get("name", "")
+            if p.exists():
+                html_content = p.read_text(encoding="utf-8")
+                # Escape for srcdoc attribute
+                escaped = html_content.replace("&", "&amp;").replace('"', "&quot;")
+                cards.append(
+                    f'<div class="fig-card fig-interactive">'
+                    f'<iframe id="plotly-frame-{fig_idx}" srcdoc="{escaped}" '
+                    f'style="width:100%;height:500px;border:none;" loading="lazy"></iframe>'
+                    f'<div class="fig-actions">'
+                    f'<p class="fig-caption">{desc} (interactivo)</p>'
+                    f'<button class="btn-export" onclick="exportPlotly400DPI(\'plotly-frame-{fig_idx}\', \'{fig.get("name", "figure")}\')">Exportar PNG 400 DPI</button>'
+                    f'</div></div>'
+                )
+                fig_idx += 1
+            continue
+
+        # PNG/JPEG: base64 embed
         p = Path(fig_path)
         if not p.is_absolute():
             p = output_dir / fig_path
         if not p.exists():
-            # Intentar dentro de figures/
             p = output_dir / "figures" / fig.get("name", "")
         b64 = _encode_image_base64(str(p))
         if not b64:
             continue
-        desc = fig.get("description", fig.get("name", ""))
+        safe_name = fig.get("name", "figure").replace(".png", "")
         cards.append(
             f'<div class="fig-card">'
             f'<img src="{b64}" alt="{desc}" loading="lazy">'
+            f'<div class="fig-actions">'
             f'<p class="fig-caption">{desc}</p>'
-            f'</div>'
+            f'<a class="btn-export" href="{b64}" download="{safe_name}_400dpi.png">Descargar PNG</a>'
+            f'</div></div>'
         )
     return "\n".join(cards) if cards else "<p>No se pudieron cargar las figuras.</p>"
 
@@ -123,72 +155,498 @@ def _build_profile_table(perfil: dict) -> str:
     )
 
 
+def _build_feature_importance_html(feat_imp: dict) -> str:
+    """Genera tabla HTML con ranking de feature importance."""
+    if not feat_imp:
+        return "<p>No se calculo feature importance.</p>"
+
+    mi = feat_imp.get("mutual_information", {})
+    perm = feat_imp.get("permutation_importance", {})
+    top = feat_imp.get("top_features", [])
+
+    parts: list[str] = []
+
+    if top:
+        parts.append("<h3>Top Features (ranking combinado)</h3><ol>")
+        for f in top:
+            parts.append(f"<li><strong>{f}</strong></li>")
+        parts.append("</ol>")
+
+    if mi:
+        rows = []
+        for col, score in mi.items():
+            rows.append(f"<tr><td>{col}</td><td>{score:.6f}</td></tr>")
+        parts.append(
+            '<h3>Mutual Information</h3>'
+            '<table class="data-table"><thead><tr><th>Feature</th><th>MI Score</th>'
+            f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
+        )
+
+    if perm:
+        rows = []
+        for col, info in perm.items():
+            if isinstance(info, dict):
+                rows.append(
+                    f"<tr><td>{col}</td><td>{info.get('mean', 0):.6f}</td>"
+                    f"<td>{info.get('std', 0):.6f}</td></tr>"
+                )
+        parts.append(
+            '<h3>Permutation Importance</h3>'
+            '<table class="data-table"><thead><tr><th>Feature</th><th>Mean</th><th>Std</th>'
+            f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
+        )
+
+    return "\n".join(parts) if parts else "<p>No data.</p>"
+
+
+def _build_refs_html(refs: list) -> str:
+    """Genera HTML para referencias con DOI y enlaces al artículo."""
+    if not refs:
+        return "<p>No se encontraron referencias.</p>"
+
+    cards: list[str] = []
+    for i, r in enumerate(refs, 1):
+        title = r.get("title", "Sin título")
+        authors = r.get("authors", "")
+        year = r.get("year", "")
+        doi = r.get("doi", "")
+        url = r.get("url", "")
+        key_finding = r.get("key_finding", "")
+        relevance = r.get("relevance", "")
+        source = r.get("source", "")
+
+        links_parts: list[str] = []
+        if doi:
+            doi_url = f"https://doi.org/{doi}" if not doi.startswith("http") else doi
+            links_parts.append(
+                f'<a href="{doi_url}" target="_blank" rel="noopener">DOI: {doi}</a>'
+            )
+        if url:
+            links_parts.append(
+                f'<a href="{url}" target="_blank" rel="noopener">Ver artículo ↗</a>'
+            )
+        links_html = " &nbsp;|&nbsp; ".join(links_parts) if links_parts else "<em>Sin enlace disponible</em>"
+
+        source_badge = ""
+        if source == "tavily":
+            source_badge = ' <span class="badge badge-ok">Web</span>'
+        elif source == "claude":
+            source_badge = ' <span class="badge badge-fallback">Académico</span>'
+
+        meta_parts = []
+        if authors:
+            meta_parts.append(authors)
+        if year:
+            meta_parts.append(f"({year})")
+        meta_line = " ".join(meta_parts)
+
+        finding_html = f'<p class="ref-finding">{key_finding}</p>' if key_finding else ""
+        relevance_html = f'<p class="ref-relevance"><em>{relevance}</em></p>' if relevance else ""
+        meta_html = f'<p class="ref-meta">{meta_line}</p>' if meta_line else ""
+
+        cards.append(
+            f'<div class="ref-card">'
+            f'<div class="ref-number">{i}</div>'
+            f'<div class="ref-content">'
+            f'<h4>{title}{source_badge}</h4>'
+            f'{meta_html}'
+            f'{finding_html}'
+            f'{relevance_html}'
+            f'<div class="ref-links">{links_html}</div>'
+            f'</div></div>'
+        )
+
+    return "\n".join(cards)
+
+
+def _build_hallazgos_html(hallazgos: dict) -> str:
+    """Formatea hallazgos EDA en secciones legibles (no JSON)."""
+    if not hallazgos:
+        return "<p>No se generaron hallazgos.</p>"
+
+    parts: list[str] = []
+
+    # Interpretación (texto libre de Claude)
+    interp = hallazgos.get("interpretation", "")
+    if interp:
+        parts.append(
+            f'<div class="hallazgo-card hallazgo-interpretation">'
+            f'<h3>🔍 Interpretación General</h3>'
+            f'<p>{interp}</p></div>'
+        )
+
+    # KPI resumen rápido
+    normality = hallazgos.get("normality", {})
+    outliers_data = hallazgos.get("outliers", {})
+    vif_summary = hallazgos.get("vif_summary", {})
+    fi = hallazgos.get("feature_importance", {})
+    top = fi.get("top_features", [])
+
+    n_normal = sum(1 for v in normality.values() if isinstance(v, dict) and v.get("normal"))
+    n_not_normal = sum(1 for v in normality.values() if isinstance(v, dict) and not v.get("normal"))
+    n_outlier_vars = sum(1 for v in outliers_data.values() if isinstance(v, dict) and v.get("pct", 0) > 1)
+    n_vif_flagged = vif_summary.get("n_flagged", 0)
+
+    parts.append(
+        '<div class="kpi-row">'
+        f'<div class="kpi"><div class="value">{n_normal}</div><div class="label">Vars normales</div></div>'
+        f'<div class="kpi"><div class="value">{n_not_normal}</div><div class="label">Vars no normales</div></div>'
+        f'<div class="kpi"><div class="value">{n_outlier_vars}</div><div class="label">Vars con outliers &gt;1%</div></div>'
+        f'<div class="kpi"><div class="value">{n_vif_flagged}</div><div class="label">Vars VIF alto</div></div>'
+        f'<div class="kpi"><div class="value">{len(top)}</div><div class="label">Top features</div></div>'
+        '</div>'
+    )
+
+    # Correlaciones
+    corr = hallazgos.get("correlations", {})
+    if corr:
+        spearman = corr.get("spearman", {})
+        if spearman:
+            # Find strong correlations (|r| > 0.5, non-diagonal)
+            strong: list[str] = []
+            seen: set[tuple[str, str]] = set()
+            for row_name, row_vals in spearman.items():
+                for col_name, val in row_vals.items():
+                    if row_name == col_name:
+                        continue
+                    pair = tuple(sorted((row_name, col_name)))
+                    if pair in seen:
+                        continue
+                    seen.add(pair)
+                    if abs(val) > 0.5:
+                        direction = "positiva" if val > 0 else "negativa"
+                        strong.append(
+                            f"<li><strong>{row_name}</strong> ↔ <strong>{col_name}</strong>: "
+                            f"r = {val:.3f} (correlación {direction} {'fuerte' if abs(val) > 0.7 else 'moderada'})</li>"
+                        )
+            if strong:
+                parts.append(
+                    '<div class="hallazgo-card">'
+                    '<h3>📊 Correlaciones Significativas (Spearman |r| &gt; 0.5)</h3>'
+                    f'<ul>{"".join(strong[:15])}</ul></div>'
+                )
+            else:
+                parts.append(
+                    '<div class="hallazgo-card"><h3>📊 Correlaciones</h3>'
+                    '<p>No se encontraron correlaciones fuertes (|r| &gt; 0.5) entre variables.</p></div>'
+                )
+
+    # Outliers
+    outliers = hallazgos.get("outliers", {})
+    if outliers:
+        rows = []
+        for col, info in outliers.items():
+            n_out = info.get("n_outliers", 0)
+            pct = info.get("pct", 0)
+            severity = "alta" if pct > 5 else "moderada" if pct > 1 else "baja"
+            color_class = "badge-error" if pct > 5 else "badge-fallback" if pct > 1 else "badge-ok"
+            rows.append(
+                f"<tr><td>{col}</td><td>{n_out}</td><td>{pct:.1f}%</td>"
+                f'<td><span class="badge {color_class}">{severity}</span></td></tr>'
+            )
+        parts.append(
+            '<div class="hallazgo-card">'
+            '<h3>⚠️ Outliers (IQR 1.5×)</h3>'
+            '<table class="data-table"><thead><tr><th>Variable</th><th>N Outliers</th>'
+            f'<th>Porcentaje</th><th>Severidad</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+        )
+
+    # Feature importance summary
+    if top:
+        parts.append(
+            '<div class="hallazgo-card">'
+            '<h3>🏆 Top Features (Ranking Combinado MI + Permutation)</h3><ol>' +
+            "".join(f"<li><strong>{f}</strong></li>" for f in top) +
+            '</ol></div>'
+        )
+
+    if not parts:
+        return "<p>No se generaron hallazgos relevantes.</p>"
+
+    return "\n".join(parts)
+
+
+def _build_normality_html(hallazgos: dict) -> str:
+    """Genera tabla HTML con resultados de tests de normalidad."""
+    normality = hallazgos.get("normality", {}) if hallazgos else {}
+    if not normality:
+        return "<p>No se ejecutaron tests de normalidad.</p>"
+
+    rows = []
+    for col, info in normality.items():
+        test_name = info.get("test", "shapiro").capitalize()
+        stat = info.get("statistic", 0)
+        pval = info.get("p_value")
+        is_normal = info.get("normal")
+
+        if pval is not None:
+            verdict = "Normal" if is_normal else "No normal"
+            color_class = "badge-ok" if is_normal else "badge-error"
+            rows.append(
+                f"<tr><td>{col}</td><td>{test_name}</td><td>{stat:.4f}</td>"
+                f'<td>{pval:.4f}</td><td><span class="badge {color_class}">{verdict}</span></td></tr>'
+            )
+        else:
+            # Anderson-Darling (no p-value)
+            rows.append(
+                f"<tr><td>{col}</td><td>{test_name}</td><td>{stat:.4f}</td>"
+                f"<td>N/A</td><td>Ver critical values</td></tr>"
+            )
+
+    return (
+        '<table class="data-table sortable"><thead><tr>'
+        '<th>Variable</th><th>Test</th><th>Estadístico</th>'
+        f'<th>p-valor</th><th>Resultado</th></tr></thead><tbody>{"".join(rows)}</tbody></table>'
+    )
+
+
+def _build_vif_html(vif_all: dict, vif_flags: list) -> str:
+    """Tabla HTML con valores VIF."""
+    if not vif_all:
+        return "<p>No se calcularon valores VIF.</p>"
+
+    rows = []
+    flagged_cols = {f["column"] for f in vif_flags} if vif_flags else set()
+    for col, vif_val in sorted(vif_all.items(), key=lambda x: x[1], reverse=True):
+        display_val = f"{vif_val:.2f}" if vif_val < 9999 else "∞ (colinealidad perfecta)"
+        if vif_val > 10:
+            severity = "alta"
+            color_class = "badge-error"
+        elif vif_val > 5:
+            severity = "moderada"
+            color_class = "badge-fallback"
+        else:
+            severity = "baja"
+            color_class = "badge-ok"
+        rows.append(
+            f"<tr><td>{col}</td><td>{display_val}</td>"
+            f'<td><span class="badge {color_class}">{severity}</span></td></tr>'
+        )
+
+    n_flagged = len(flagged_cols)
+    summary = (
+        f"<p><strong>{n_flagged} variable(s)</strong> con VIF &gt; 10 (multicolinealidad alta). "
+        f"Considerar eliminación o reducción de dimensionalidad.</p>"
+        if n_flagged > 0
+        else "<p>Ninguna variable supera el umbral VIF = 10. No hay multicolinealidad crítica.</p>"
+    )
+
+    return (
+        summary +
+        '<table class="data-table sortable"><thead><tr>'
+        '<th>Variable</th><th>VIF</th><th>Multicolinealidad</th>'
+        f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
+    )
+
+
+def _build_bp_html(bp_result: dict | None, correccion: str | None) -> str:
+    """Formatea resultados del test de Breusch-Pagan."""
+    if not bp_result or bp_result.get("error"):
+        return "<p>Test de Breusch-Pagan no aplicable (solo regresión) o no ejecutado.</p>"
+
+    hetero = bp_result.get("heteroscedastic", False)
+    bp_stat = bp_result.get("bp_statistic", 0)
+    bp_p = bp_result.get("bp_pvalue", 0)
+    f_stat = bp_result.get("f_statistic", 0)
+    f_p = bp_result.get("f_pvalue", 0)
+
+    verdict_class = "badge-error" if hetero else "badge-ok"
+    verdict_text = "Heteroscedástico" if hetero else "Homoscedástico"
+
+    html = (
+        f'<div class="kpi-row">'
+        f'<div class="kpi"><div class="value">{bp_stat:.2f}</div><div class="label">BP Statistic</div></div>'
+        f'<div class="kpi"><div class="value">{bp_p:.4f}</div><div class="label">BP p-valor</div></div>'
+        f'<div class="kpi"><div class="value">{f_stat:.2f}</div><div class="label">F Statistic</div></div>'
+        f'<div class="kpi"><div class="value">{f_p:.4f}</div><div class="label">F p-valor</div></div>'
+        f'<div class="kpi"><div class="value"><span class="badge {verdict_class}">{verdict_text}</span></div>'
+        f'<div class="label">Resultado (α=0.05)</div></div>'
+        f'</div>'
+    )
+
+    if hetero:
+        html += (
+            '<div class="alert alert-warning">'
+            '<strong>Se detectó heteroscedasticidad.</strong> '
+            'Los errores estándar OLS pueden ser sesgados. '
+        )
+        if correccion:
+            html += f'Corrección sugerida: <strong>{correccion}</strong> '
+            if correccion == "WLS":
+                html += "(Weighted Least Squares)."
+            elif correccion == "GLS":
+                html += "(Generalized Least Squares — también hay multicolinealidad alta)."
+            else:
+                html += "(HC3 robust standard errors)."
+        html += '</div>'
+    else:
+        html += (
+            '<div class="alert alert-ok">'
+            'No se detectó heteroscedasticidad significativa. '
+            'Los errores estándar OLS son válidos.'
+            '</div>'
+        )
+
+    return html
+
+
+def _build_download_buttons(state: dict, output_dir: Path) -> str:
+    """Genera botones de descarga para train y test datasets."""
+    parts: list[str] = []
+
+    train_final = state.get("dataset_train_final", "")
+    test_final = state.get("dataset_test_final", "")
+    train_prov = state.get("dataset_train_provisional", "")
+    test_proc = state.get("dataset_test_procesado", "")
+
+    datasets = []
+    if train_final:
+        datasets.append(("Train (Final)", train_final))
+    elif train_prov:
+        datasets.append(("Train (Provisional)", train_prov))
+
+    if test_final:
+        datasets.append(("Test (Final)", test_final))
+    elif test_proc:
+        datasets.append(("Test (Procesado)", test_proc))
+
+    if not datasets:
+        return "<p>No hay datasets disponibles para descarga.</p>"
+
+    for label, path in datasets:
+        p = Path(path)
+        if not p.exists():
+            continue
+        try:
+            csv_data = p.read_bytes()
+            b64 = base64.b64encode(csv_data).decode("ascii")
+            fname = p.name
+            parts.append(
+                f'<a class="btn-download" href="data:text/csv;base64,{b64}" '
+                f'download="{fname}">'
+                f'⬇ Descargar {label} ({fname})</a>'
+            )
+        except Exception:
+            continue
+
+    if not parts:
+        return "<p>No se pudieron preparar los datasets para descarga.</p>"
+
+    return '<div class="download-row">' + "\n".join(parts) + '</div>'
+
+
 # ---------------------------------------------------------------------------
 # CSS + JS
 # ---------------------------------------------------------------------------
 
 _CSS = """
 :root {
-    --bg: #f8f9fa; --bg2: #ffffff; --text: #212529; --accent: #3498db;
-    --accent2: #2980b9; --sidebar-bg: #2c3e50; --sidebar-text: #ecf0f1;
-    --border: #dee2e6; --card-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    --bg: #f0f2f5; --bg2: #ffffff; --text: #212529; --accent: #2563eb;
+    --accent2: #1d4ed8; --accent-light: #dbeafe; --sidebar-bg: #1e293b;
+    --sidebar-text: #e2e8f0; --border: #e2e8f0; --card-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08);
+    --success: #16a34a; --success-bg: #dcfce7; --warning: #d97706; --warning-bg: #fef3c7;
+    --danger: #dc2626; --danger-bg: #fee2e2; --radius: 12px;
 }
 [data-theme="dark"] {
-    --bg: #1a1a2e; --bg2: #16213e; --text: #e0e0e0; --accent: #64b5f6;
-    --accent2: #42a5f5; --sidebar-bg: #0f3460; --sidebar-text: #e0e0e0;
-    --border: #333; --card-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    --bg: #0f172a; --bg2: #1e293b; --text: #e2e8f0; --accent: #60a5fa;
+    --accent2: #93c5fd; --accent-light: #1e3a5f; --sidebar-bg: #0f172a;
+    --sidebar-text: #e2e8f0; --border: #334155; --card-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    --success: #4ade80; --success-bg: #14532d; --warning: #fbbf24; --warning-bg: #451a03;
+    --danger: #f87171; --danger-bg: #450a0a;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: 'Segoe UI', Tahoma, Geneva, sans-serif; background: var(--bg);
-       color: var(--text); display: flex; min-height: 100vh; }
-.sidebar { width: 260px; background: var(--sidebar-bg); color: var(--sidebar-text);
-           padding: 20px 0; position: fixed; height: 100vh; overflow-y: auto; z-index: 10; }
-.sidebar h2 { padding: 0 20px 15px; font-size: 1.1rem; border-bottom: 1px solid rgba(255,255,255,0.1); margin-bottom: 10px; }
-.sidebar a { display: block; padding: 8px 20px; color: var(--sidebar-text); text-decoration: none;
-             font-size: 0.9rem; transition: background 0.2s; }
-.sidebar a:hover, .sidebar a.active { background: rgba(255,255,255,0.1); border-left: 3px solid var(--accent); }
-.main { margin-left: 260px; padding: 30px 40px; flex: 1; max-width: 1100px; }
-.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;
-          padding-bottom: 15px; border-bottom: 2px solid var(--accent); }
-.header h1 { font-size: 1.6rem; }
-.theme-toggle { cursor: pointer; padding: 8px 16px; border: 1px solid var(--border);
-                border-radius: 6px; background: var(--bg2); color: var(--text); font-size: 0.85rem; }
-section { background: var(--bg2); border-radius: 10px; padding: 25px; margin-bottom: 25px;
-          box-shadow: var(--card-shadow); }
-section h2 { color: var(--accent); font-size: 1.25rem; margin-bottom: 15px;
-             padding-bottom: 8px; border-bottom: 1px solid var(--border); }
-section h3 { color: var(--accent2); margin: 15px 0 8px; }
-.data-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 0.9rem; }
-.data-table th { background: var(--accent); color: white; padding: 10px 12px; text-align: left; cursor: pointer; }
+body { font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+       background: var(--bg); color: var(--text); display: flex; min-height: 100vh;
+       line-height: 1.6; }
+.sidebar { width: 280px; background: var(--sidebar-bg); color: var(--sidebar-text);
+           padding: 24px 0; position: fixed; height: 100vh; overflow-y: auto; z-index: 10;
+           border-right: 1px solid rgba(255,255,255,0.05); }
+.sidebar h2 { padding: 0 24px 16px; font-size: 1.1rem; letter-spacing: 0.5px;
+              border-bottom: 1px solid rgba(255,255,255,0.1); margin-bottom: 12px; }
+.sidebar a { display: block; padding: 10px 24px; color: var(--sidebar-text); text-decoration: none;
+             font-size: 0.88rem; transition: all 0.2s; border-left: 3px solid transparent; }
+.sidebar a:hover, .sidebar a.active { background: rgba(255,255,255,0.08);
+    border-left-color: var(--accent); color: var(--accent); }
+.main { margin-left: 280px; padding: 32px 48px; flex: 1; max-width: 1140px; }
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px;
+          padding-bottom: 16px; border-bottom: 2px solid var(--accent); }
+.header h1 { font-size: 1.5rem; font-weight: 700; }
+.theme-toggle { cursor: pointer; padding: 8px 18px; border: 1px solid var(--border);
+                border-radius: 8px; background: var(--bg2); color: var(--text);
+                font-size: 0.85rem; transition: all 0.2s; }
+.theme-toggle:hover { border-color: var(--accent); }
+section { background: var(--bg2); border-radius: var(--radius); padding: 28px; margin-bottom: 24px;
+          box-shadow: var(--card-shadow); border: 1px solid var(--border); }
+section h2 { color: var(--accent); font-size: 1.2rem; margin-bottom: 18px; font-weight: 700;
+             padding-bottom: 10px; border-bottom: 2px solid var(--accent-light); }
+section h3 { color: var(--accent2); margin: 18px 0 10px; font-size: 1rem; font-weight: 600; }
+.data-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.88rem; }
+.data-table th { background: var(--accent); color: white; padding: 10px 14px; text-align: left;
+                 cursor: pointer; font-weight: 600; font-size: 0.82rem; text-transform: uppercase;
+                 letter-spacing: 0.5px; }
 .data-table th:hover { background: var(--accent2); }
-.data-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
-.data-table tr:hover { background: rgba(52,152,219,0.05); }
+.data-table td { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.data-table tr:hover { background: var(--accent-light); }
 .fig-card { display: inline-block; margin: 10px; text-align: center; vertical-align: top; }
 .fig-card img { max-width: 480px; border-radius: 8px; box-shadow: var(--card-shadow); cursor: pointer;
                 transition: transform 0.2s; }
 .fig-card img:hover { transform: scale(1.02); }
-.fig-caption { font-size: 0.85rem; color: var(--accent2); margin-top: 5px; }
-.badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 600; }
-.badge-ok { background: #d4edda; color: #155724; }
-.badge-error { background: #f8d7da; color: #721c24; }
-.badge-fallback { background: #fff3cd; color: #856404; }
-.kpi-row { display: flex; gap: 15px; flex-wrap: wrap; margin: 15px 0; }
-.kpi { background: var(--bg); border-radius: 8px; padding: 15px 20px; min-width: 150px;
-       text-align: center; box-shadow: var(--card-shadow); }
-.kpi .value { font-size: 1.8rem; font-weight: 700; color: var(--accent); }
-.kpi .label { font-size: 0.8rem; color: var(--text); opacity: 0.7; }
-pre { background: var(--bg); padding: 12px; border-radius: 6px; overflow-x: auto;
+.fig-interactive { width: 100%; margin: 14px 0; display: block; }
+.fig-interactive iframe { border-radius: 8px; box-shadow: var(--card-shadow); }
+.fig-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 10px; }
+.fig-caption { font-size: 0.85rem; color: var(--accent2); }
+.btn-export, .btn-download { display: inline-block; padding: 6px 16px; border-radius: 6px;
+    font-size: 0.8rem; font-weight: 600; cursor: pointer; text-decoration: none;
+    border: 1px solid var(--accent); color: var(--accent); background: transparent;
+    transition: all 0.2s; white-space: nowrap; }
+.btn-export:hover, .btn-download:hover { background: var(--accent); color: white; }
+.download-row { display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0; }
+.btn-download { padding: 12px 24px; font-size: 0.9rem; border-radius: 8px;
+    background: var(--accent); color: white; border: none; }
+.btn-download:hover { background: var(--accent2); }
+.badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 0.78rem; font-weight: 600; }
+.badge-ok { background: var(--success-bg); color: var(--success); }
+.badge-error { background: var(--danger-bg); color: var(--danger); }
+.badge-fallback { background: var(--warning-bg); color: var(--warning); }
+.kpi-row { display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0; }
+.kpi { background: var(--bg); border-radius: 10px; padding: 18px 22px; min-width: 140px;
+       text-align: center; box-shadow: var(--card-shadow); border: 1px solid var(--border); }
+.kpi .value { font-size: 1.6rem; font-weight: 700; color: var(--accent); }
+.kpi .label { font-size: 0.78rem; color: var(--text); opacity: 0.65; margin-top: 4px; }
+.hallazgo-card { background: var(--bg); border-radius: 10px; padding: 18px 22px;
+    margin: 12px 0; border-left: 4px solid var(--accent); }
+.hallazgo-card h3 { color: var(--accent); margin: 0 0 10px; font-size: 0.95rem; }
+.alert { padding: 14px 20px; border-radius: 8px; margin: 12px 0; font-size: 0.9rem; }
+.alert-warning { background: var(--warning-bg); border-left: 4px solid var(--warning); }
+.alert-ok { background: var(--success-bg); border-left: 4px solid var(--success); }
+.ref-card { display: flex; gap: 14px; background: var(--bg); border-radius: 10px; padding: 16px 20px;
+    margin: 10px 0; border-left: 4px solid var(--accent); transition: box-shadow 0.2s; }
+.ref-card:hover { box-shadow: var(--card-shadow); }
+.ref-number { font-size: 1.3rem; font-weight: 700; color: var(--accent); min-width: 30px;
+    display: flex; align-items: flex-start; justify-content: center; padding-top: 2px; }
+.ref-content { flex: 1; }
+.ref-content h4 { font-size: 0.95rem; margin-bottom: 4px; line-height: 1.4; }
+.ref-meta { font-size: 0.82rem; color: var(--text); opacity: 0.7; margin-bottom: 6px; }
+.ref-finding { font-size: 0.88rem; margin-bottom: 4px; }
+.ref-relevance { font-size: 0.82rem; opacity: 0.75; margin-bottom: 6px; }
+.ref-links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+.ref-links a { font-size: 0.82rem; color: var(--accent); text-decoration: none; font-weight: 600;
+    padding: 3px 10px; border: 1px solid var(--accent); border-radius: 6px; transition: all 0.2s; }
+.ref-links a:hover { background: var(--accent); color: white; }
+.hallazgo-interpretation { border-left-color: var(--success); }
+pre { background: var(--bg); padding: 14px; border-radius: 8px; overflow-x: auto;
       font-size: 0.85rem; border: 1px solid var(--border); }
 .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-         background: rgba(0,0,0,0.8); z-index: 100; justify-content: center; align-items: center; }
+         background: rgba(0,0,0,0.85); z-index: 100; justify-content: center; align-items: center; }
 .modal img { max-width: 90%; max-height: 90%; border-radius: 8px; }
 .modal.show { display: flex; }
-ul, ol { margin-left: 20px; }
-li { margin-bottom: 5px; }
+ul, ol { margin-left: 22px; }
+li { margin-bottom: 6px; }
 @media (max-width: 768px) {
     .sidebar { display: none; }
-    .main { margin-left: 0; padding: 15px; }
+    .main { margin-left: 0; padding: 16px; }
     .fig-card img { max-width: 100%; }
+    .kpi-row { justify-content: center; }
 }
 """
 
@@ -203,6 +661,25 @@ function toggleTheme() {
     const saved = localStorage.getItem('theme');
     if (saved) document.documentElement.setAttribute('data-theme', saved);
 })();
+
+// Export Plotly chart at 400 DPI
+function exportPlotly400DPI(frameId, name) {
+    try {
+        var iframe = document.getElementById(frameId);
+        var iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+        var plotDiv = iframeDoc.querySelector('.plotly-graph-div');
+        if (plotDiv && iframe.contentWindow.Plotly) {
+            iframe.contentWindow.Plotly.downloadImage(plotDiv, {
+                format: 'png', width: 3200, height: 2400, scale: 3,
+                filename: name.replace('.html', '') + '_400dpi'
+            });
+        } else {
+            alert('Esperando carga de la gráfica. Intenta de nuevo en unos segundos.');
+        }
+    } catch(e) {
+        alert('Error al exportar: ' + e.message);
+    }
+}
 
 // Scroll spy for sidebar
 document.addEventListener('DOMContentLoaded', function() {
@@ -310,17 +787,20 @@ def build_html_report(state: dict[str, Any], output_dir: str | Path) -> Path:
 
     # Referencias
     refs = state.get("refs", [])
-    if refs:
-        refs_html = "<ul>" + "".join(
-            f"<li>{r.get('title', 'N/A')} (DOI: {r.get('doi', 'N/A')})</li>"
-            for r in refs
-        ) + "</ul>"
-    else:
-        refs_html = "<p>No se encontraron referencias.</p>"
+    refs_html = _build_refs_html(refs)
 
-    # Hallazgos
+    # Hallazgos — formatted (no JSON)
     hallazgos = state.get("hallazgos_eda", {})
-    hallazgos_json = json.dumps(hallazgos, indent=2, default=str, ensure_ascii=False) if hallazgos else "N/A"
+
+    # VIF data
+    vif_all = state.get("vif_all", {})
+    if not vif_all:
+        vif_all = hallazgos.get("vif_all", {})
+    vif_flags = state.get("vif_flags", [])
+
+    # Breusch-Pagan data
+    bp_result = state.get("breusch_pagan_result")
+    correccion = state.get("modelo_correccion_heterosc")
 
     # TS
     if state.get("flag_timeseries"):
@@ -337,13 +817,18 @@ def build_html_report(state: dict[str, Any], output_dir: str | Path) -> Path:
 
     # Sidebar links
     nav_items = [
-        ("resumen", "Resumen"),
+        ("resumen", "Resumen Ejecutivo"),
         ("literatura", "Literatura"),
         ("hipotesis", "Hipotesis"),
         ("dataset", "Dataset"),
+        ("descargas", "Descargar Datos"),
         ("perfil", "Perfil de Columnas"),
         ("preprocesamiento", "Preprocesamiento"),
         ("hallazgos", "Hallazgos EDA"),
+        ("normalidad", "Normalidad"),
+        ("vif", "VIF — Multicolinealidad"),
+        ("breusch_pagan", "Breusch-Pagan"),
+        ("importancia", "Feature Importance"),
         ("timeseries", "Series de Tiempo"),
         ("decision", "Decision"),
         ("modelos", "Modelos"),
@@ -410,6 +895,12 @@ def build_html_report(state: dict[str, Any], output_dir: str | Path) -> Path:
                      "Desbalance": desbalance_str, "Serie temporal": state.get('flag_timeseries', False)})}
 </section>
 
+<section id="descargas">
+<h2>Descargar Datasets</h2>
+<p>Datasets listos para modelamiento (con encoding y preprocesamiento aplicados):</p>
+{_build_download_buttons(state, output_dir)}
+</section>
+
 <section id="perfil">
 <h2>Perfil de Columnas</h2>
 {_build_profile_table(state.get('perfil_columnas', {}))}
@@ -427,7 +918,30 @@ def build_html_report(state: dict[str, Any], output_dir: str | Path) -> Path:
 
 <section id="hallazgos">
 <h2>Hallazgos EDA Tabular</h2>
-<pre>{hallazgos_json}</pre>
+{_build_hallazgos_html(hallazgos)}
+</section>
+
+<section id="normalidad">
+<h2>Test de Normalidad</h2>
+<p>Evaluacion de la distribucion normal de variables numericas (Shapiro-Wilk / Anderson-Darling, α = 0.05).</p>
+{_build_normality_html(hallazgos)}
+</section>
+
+<section id="vif">
+<h2>VIF — Factor de Inflacion de Varianza</h2>
+<p>Analisis de multicolinealidad mediante VIF. Valores &gt; 10 indican multicolinealidad severa.</p>
+{_build_vif_html(vif_all, vif_flags)}
+</section>
+
+<section id="breusch_pagan">
+<h2>Test de Breusch-Pagan — Heteroscedasticidad</h2>
+<p>Evalua si la varianza de los residuos es constante (homoscedasticidad) en el modelo de regresion.</p>
+{_build_bp_html(bp_result, correccion)}
+</section>
+
+<section id="importancia">
+<h2>Feature Importance</h2>
+{_build_feature_importance_html(state.get('feature_importance', {}))}
 </section>
 
 <section id="timeseries">

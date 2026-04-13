@@ -102,7 +102,7 @@ def ml_strategist(state: EDAState) -> dict[str, Any]:
                     hallazgos, desbalance, dataset_size
                 )
             elif tarea == "forecasting" and modelo_ts:
-                modelos = [{"name": modelo_ts.get("type", "ARIMA"), "reason": "TS Analyst selection"}]
+                modelos = _recommend_forecasting(modelo_ts, dataset_size)
                 model_family = "linear"
                 metrica = "MAE"
             else:
@@ -150,27 +150,40 @@ def ml_strategist(state: EDAState) -> dict[str, Any]:
 def _recommend_regression(
     hallazgos: dict, vif_flags: list, bp_result: dict | None, n: int
 ) -> tuple[list[dict[str, Any]], str, str]:
-    """Recomienda modelos para regresión según señales del EDA."""
+    """Recomienda modelos para regresión según señales del EDA (5-7 modelos + ensembles)."""
     modelos: list[dict[str, Any]] = []
     model_family = "tree"
 
     has_high_vif = len(vif_flags) > 0
     has_heterosc = bp_result is not None and bp_result.get("heteroscedastic", False)
 
+    # --- Modelos base ---
     if has_high_vif:
         modelos.append({"name": "Ridge", "reason": "VIF alto → regularización L2"})
         modelos.append({"name": "Lasso", "reason": "VIF alto → selección L1"})
+        modelos.append({"name": "ElasticNet", "reason": "VIF alto → combinación L1+L2"})
         model_family = "linear"
     if has_heterosc:
-        modelos.append({"name": "SVR", "reason": "Heteroscedasticidad persistente"})
-        model_family = "linear"
-    if n < 200:
-        if not modelos:
-            modelos.append({"name": "Ridge", "reason": "N bajo → regularización"})
+        modelos.append({"name": "SVR", "reason": "Heteroscedasticidad → kernel RBF robusto"})
+        if model_family != "linear":
             model_family = "linear"
-    else:
+
+    if n >= 200:
         modelos.append({"name": "XGBRegressor", "reason": "N suficiente + potencial no-lineal"})
-        modelos.append({"name": "LGBMRegressor", "reason": "Alternativa eficiente"})
+        modelos.append({"name": "LGBMRegressor", "reason": "Alternativa eficiente a XGB"})
+        modelos.append({"name": "RandomForestRegressor", "reason": "Baseline robusto tree-based"})
+        modelos.append({"name": "GradientBoostingRegressor", "reason": "Boosting interpretable sklearn"})
+    else:
+        if not any(m["name"] in ("Ridge", "Lasso") for m in modelos):
+            modelos.append({"name": "Ridge", "reason": "N bajo → regularización simple"})
+        modelos.append({"name": "RandomForestRegressor", "reason": "Robusto con N bajo"})
+
+    # --- Ensembles ---
+    if n >= 100:
+        modelos.append({"name": "StackingRegressor", "reason": "Ensemble: combina predicciones de base models"})
+        modelos.append({"name": "VotingRegressor", "reason": "Ensemble: promedio de múltiples modelos"})
+    if n >= 300:
+        modelos.append({"name": "AdaBoostRegressor", "reason": "Boosting adaptativo"})
 
     if not modelos:
         modelos.append({"name": "XGBRegressor", "reason": "default"})
@@ -181,10 +194,11 @@ def _recommend_regression(
 def _recommend_classification(
     hallazgos: dict, desbalance: float | None, n: int
 ) -> tuple[list[dict[str, Any]], str, str]:
-    """Recomienda modelos para clasificación según señales del EDA."""
+    """Recomienda modelos para clasificación según señales del EDA (5-7 modelos + ensembles)."""
     modelos: list[dict[str, Any]] = []
     model_family = "tree"
 
+    # --- Modelos base ---
     if desbalance and desbalance > 3:
         modelos.append({
             "name": "XGBClassifier",
@@ -194,11 +208,28 @@ def _recommend_classification(
             "name": "RandomForestClassifier",
             "reason": "Desbalanceo → class_weight='balanced'",
         })
+        modelos.append({
+            "name": "LGBMClassifier",
+            "reason": "Desbalanceo → is_unbalance=True",
+        })
     else:
         modelos.append({"name": "XGBClassifier", "reason": "Versatilidad general"})
         modelos.append({"name": "RandomForestClassifier", "reason": "Baseline robusto"})
+        modelos.append({"name": "LGBMClassifier", "reason": "Eficiente y competitivo"})
 
-    modelos.append({"name": "LogisticRegression", "reason": "Interpretabilidad + L1"})
+    modelos.append({"name": "LogisticRegression", "reason": "Interpretabilidad + L1/L2"})
+    modelos.append({"name": "GradientBoostingClassifier", "reason": "Boosting sklearn interpretable"})
+
+    if n >= 500:
+        modelos.append({"name": "SVC", "reason": "N suficiente para kernel RBF"})
+
+    # --- Ensembles ---
+    if n >= 100:
+        modelos.append({"name": "StackingClassifier", "reason": "Ensemble: meta-learner sobre base models"})
+        modelos.append({"name": "VotingClassifier", "reason": "Ensemble: voto mayoritario/soft"})
+    if n >= 200:
+        modelos.append({"name": "BaggingClassifier", "reason": "Ensemble: reduce varianza"})
+        modelos.append({"name": "AdaBoostClassifier", "reason": "Boosting adaptativo"})
 
     return modelos, model_family, "f1_macro"
 
@@ -214,3 +245,28 @@ def _select_hp_technique(
         return "Optuna"
     else:
         return "RandomizedSearchCV"
+
+
+def _recommend_forecasting(
+    modelo_ts: dict | None, n: int,
+) -> list[dict[str, Any]]:
+    """Recomienda modelos de forecasting expandidos."""
+    modelos: list[dict[str, Any]] = []
+
+    ts_type = modelo_ts.get("type", "ARIMA") if modelo_ts else "ARIMA"
+    modelos.append({"name": ts_type, "reason": "TS Analyst automatic selection"})
+
+    if ts_type != "SARIMAX":
+        modelos.append({"name": "SARIMAX", "reason": "ARIMA estacional con exógenas"})
+
+    modelos.append({"name": "ExponentialSmoothing", "reason": "Holt-Winters: trend + seasonality"})
+    modelos.append({"name": "Theta", "reason": "Theta method: robusto en M3/M4 competition"})
+
+    if n >= 100:
+        modelos.append({"name": "Prophet", "reason": "Facebook Prophet: seasonality automática"})
+    if n >= 200:
+        modelos.append({"name": "TBATS", "reason": "Multiple seasonal patterns"})
+    if n >= 50:
+        modelos.append({"name": "AutoARIMA", "reason": "pmdarima: búsqueda automática (p,d,q)"})
+
+    return modelos
