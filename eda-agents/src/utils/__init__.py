@@ -1,0 +1,1 @@
+"""Utilidades: config, logger, validación."""
