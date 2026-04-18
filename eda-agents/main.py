@@ -147,6 +147,7 @@ def main() -> None:
         "encoding_log": {},
         "features_nuevas": [],
         "balanceo_log": {},
+        "sampling_variants": {},
         "dataset_train_provisional": "",
         "dataset_test_procesado": "",
         "dataset_train_final": "",

@@ -107,9 +107,23 @@ def build_notebook(state: dict[str, Any], output_dir: str | Path) -> Path:
         f"\n"
         f"**Target:** `{target}` | **Tipo:** `{data_type}` | **Tarea:** `{tarea}`\n"
         f"\n"
-        f"Este notebook ejecuta **código real** paso a paso, tal como lo haría\n"
-        f"un científico de datos. Cada resultado se computa en vivo desde los datos\n"
-        f"originales — nada está precalculado."
+        f"---\n"
+        f"\n"
+        f"### Metodología del Análisis\n"
+        f"\n"
+        f"Este notebook implementa un **Análisis Exploratorio de Datos (EDA) completo y reproducible**,\n"
+        f"diseñado para responder a la pregunta de investigación planteada. Cada celda ejecuta código real\n"
+        f"— nada está precalculado.\n"
+        f"\n"
+        f"El flujo sigue el estándar **CRISP-DM**:\n"
+        f"1. **Comprensión de datos** — Carga, perfil, calidad, distribuciones\n"
+        f"2. **Preparación** — Split, encoding, balanceo (sin data leakage)\n"
+        f"3. **EDA cuantitativo** — Correlaciones, outliers, normalidad, VIF\n"
+        f"4. **Feature engineering** — Importancia, selección informada\n"
+        f"5. **Modelado baseline** — Modelo inicial para validar hallazgos\n"
+        f"\n"
+        f"Cada test estadístico incluye **interpretación contextualizada** a la pregunta\n"
+        f"de investigación y las hipótesis formuladas."
     ))
 
     # ======================== 1. SETUP ========================
@@ -195,8 +209,15 @@ def build_notebook(state: dict[str, Any], output_dir: str | Path) -> Path:
     cells.append(_cell_markdown(
         "## 4. Train / Test Split\n"
         "\n"
-        "Separamos los datos **antes** de cualquier transformación para evitar\n"
-        "data leakage. El encoding se ajusta exclusivamente con datos de entrenamiento."
+        "### ¿Por qué separar antes de transformar?\n"
+        "\n"
+        "El **data leakage** ocurre cuando información del conjunto de test se filtra\n"
+        "al entrenamiento, produciendo métricas artificialmente optimistas. Separamos\n"
+        "**antes** de encoding, normalización o balanceo para garantizar una evaluación\n"
+        "honesta del modelo.\n"
+        "\n"
+        "**Principio:** Todo estadístico (medias, frecuencias, mappings) se calcula\n"
+        "exclusivamente con datos de entrenamiento y se aplica tal cual al test."
     ))
     cells.append(_cell_code(
         "TEST_SIZE = 0.2\n"
@@ -221,8 +242,17 @@ def build_notebook(state: dict[str, Any], output_dir: str | Path) -> Path:
         cells.append(_cell_markdown(
             "## 5. Encoding de Variables Categóricas\n"
             "\n"
-            "Transformamos variables categóricas a numéricas paso a paso.\n"
-            "Cada técnica se ajusta **solo** con datos de entrenamiento."
+            "### Conceptos Técnicos\n"
+            "\n"
+            "Las variables categóricas deben convertirse a numéricas para que los modelos\n"
+            "las procesen. La elección del encoding impacta directamente en el desempeño:\n"
+            "\n"
+            "- **Label Encoding:** Asigna enteros (0, 1, 2...). Adecuado para variables ordinales.\n"
+            "- **One-Hot Encoding (OHE):** Crea columnas binarias. Preserva independencia entre categorías.\n"
+            "- **Frequency Encoding:** Reemplaza por frecuencia relativa. Útil con alta cardinalidad.\n"
+            "\n"
+            f"**Importante para `{target}`:** El encoding se ajusta **solo** con datos de train\n"
+            f"para prevenir data leakage. Categorías nuevas en test se marcan como -1."
         ))
         cells.append(_cell_code(
             f"# Receta de encoding (determinada por el análisis del pipeline)\n"
@@ -312,15 +342,155 @@ def build_notebook(state: dict[str, Any], output_dir: str | Path) -> Path:
             "    print('✓ Todas las columnas son numéricas. No se requiere encoding.')"
         ))
 
+    # ======================== 5b. SAMPLING VARIANTS (clasificación) ========================
+    if not is_regression:
+        cells.append(_cell_markdown(
+            "## 5b. Estrategias de Muestreo (Clasificación)\n"
+            "\n"
+            "### ¿Por qué balancear las clases?\n"
+            "\n"
+            "En problemas de clasificación, el desbalance de clases sesga al modelo hacia\n"
+            "la clase mayoritaria. Evaluamos 3 estrategias para encontrar el mejor equilibrio\n"
+            "entre representatividad y rendimiento:\n"
+            "\n"
+            "| Estrategia | Técnica | Pros | Contras |\n"
+            "|-----------|---------|------|----------|\n"
+            "| **Oversample** | RandomOverSampler | Preserva toda la info original | Puede causar overfitting |\n"
+            "| **Undersample** | RandomUnderSampler | Rápido, evita duplicados | Pierde datos mayoritarios |\n"
+            "| **Hybrid** | SMOTEENN | Genera nuevos puntos + limpia ruido | Más costoso, posibles artefactos |\n"
+            "\n"
+            f"Se selecciona la variante con menor combinación de desbalance residual y pérdida\n"
+            f"de datos, optimizando para la tarea de predicción de `{target}`."
+        ))
+        cells.append(_cell_code(
+            "from imblearn.over_sampling import RandomOverSampler\n"
+            "from imblearn.under_sampling import RandomUnderSampler\n"
+            "from imblearn.combine import SMOTEENN\n"
+            "\n"
+            "X_bal = df_train.drop(columns=[TARGET]).select_dtypes(include=[np.number]).fillna(0)\n"
+            "y_bal = df_train[TARGET]\n"
+            "\n"
+            "original_dist = y_bal.value_counts().to_dict()\n"
+            "print(f'Distribución original: {original_dist}')\n"
+            "majority = max(original_dist.values())\n"
+            "minority = min(original_dist.values())\n"
+            "ratio_original = majority / max(minority, 1)\n"
+            "print(f'Ratio de desbalance original: {ratio_original:.2f}:1')\n"
+            "\n"
+            "# 1. Oversample\n"
+            "ros = RandomOverSampler(random_state=RANDOM_SEED)\n"
+            "X_over, y_over = ros.fit_resample(X_bal, y_bal)\n"
+            "dist_over = pd.Series(y_over).value_counts().to_dict()\n"
+            "ratio_over = max(dist_over.values()) / max(min(dist_over.values()), 1)\n"
+            "print(f'\\nOversample: {len(X_over)} filas, ratio={ratio_over:.2f}:1')\n"
+            "\n"
+            "# 2. Undersample\n"
+            "rus = RandomUnderSampler(random_state=RANDOM_SEED)\n"
+            "X_under, y_under = rus.fit_resample(X_bal, y_bal)\n"
+            "dist_under = pd.Series(y_under).value_counts().to_dict()\n"
+            "ratio_under = max(dist_under.values()) / max(min(dist_under.values()), 1)\n"
+            "print(f'Undersample: {len(X_under)} filas, ratio={ratio_under:.2f}:1')\n"
+            "\n"
+            "# 3. Hybrid (SMOTEENN)\n"
+            "try:\n"
+            "    se = SMOTEENN(random_state=RANDOM_SEED)\n"
+            "    X_hyb, y_hyb = se.fit_resample(X_bal, y_bal)\n"
+            "    dist_hyb = pd.Series(y_hyb).value_counts().to_dict()\n"
+            "    ratio_hyb = max(dist_hyb.values()) / max(min(dist_hyb.values()), 1)\n"
+            "    print(f'Hybrid:      {len(X_hyb)} filas, ratio={ratio_hyb:.2f}:1')\n"
+            "except Exception as e:\n"
+            "    print(f'Hybrid falló: {e}. Usando oversample como fallback.')\n"
+            "    X_hyb, y_hyb = X_over.copy(), y_over.copy()\n"
+            "    dist_hyb = dist_over.copy()\n"
+            "    ratio_hyb = ratio_over"
+        ))
+        cells.append(_cell_markdown("### Comparación Visual de Variantes"))
+        cells.append(_cell_code(
+            "# Gráfico comparativo de distribuciones por variante\n"
+            "import plotly.graph_objects as go\n"
+            "\n"
+            "all_classes = sorted(set(list(original_dist.keys()) + list(dist_over.keys())\n"
+            "                         + list(dist_under.keys()) + list(dist_hyb.keys())), key=str)\n"
+            "variants = ['Original', 'Oversample', 'Undersample', 'Hybrid']\n"
+            "dists = [original_dist, dist_over, dist_under, dist_hyb]\n"
+            "colors = ['#636EFA', '#00CC96', '#EF553B', '#AB63FA']\n"
+            "\n"
+            "fig = go.Figure()\n"
+            "for var, dist, color in zip(variants, dists, colors):\n"
+            "    fig.add_trace(go.Bar(\n"
+            "        x=[str(c) for c in all_classes],\n"
+            "        y=[dist.get(c, 0) for c in all_classes],\n"
+            "        name=var, marker_color=color\n"
+            "    ))\n"
+            "fig.update_layout(\n"
+            "    title='Distribución de clases por variante de muestreo',\n"
+            "    barmode='group', xaxis_title='Clase', yaxis_title='Frecuencia',\n"
+            "    template='plotly_white', height=500, width=900\n"
+            ")\n"
+            "fig.show()\n"
+            "\n"
+            "# Ratio de desbalance por variante\n"
+            "ratios = [ratio_original, ratio_over, ratio_under, ratio_hyb]\n"
+            "fig2 = go.Figure(go.Bar(\n"
+            "    x=variants, y=ratios,\n"
+            "    marker_color=['gray' if r != min(ratios) else '#00CC96' for r in ratios],\n"
+            "    text=[f'{r:.2f}:1' for r in ratios], textposition='outside'\n"
+            "))\n"
+            "fig2.add_hline(y=1.0, line_dash='dash', line_color='green',\n"
+            "               annotation_text='Balance perfecto')\n"
+            "fig2.update_layout(\n"
+            "    title='Ratio de desbalance por variante (menor = mejor)',\n"
+            "    yaxis_title='Ratio (mayor/menor)', template='plotly_white',\n"
+            "    height=450, width=700\n"
+            ")\n"
+            "fig2.show()"
+        ))
+        cells.append(_cell_markdown("### Selección de la Mejor Variante"))
+        cells.append(_cell_code(
+            "# Selección basada en cercanía a ratio 1.0 + penalización por pérdida de datos\n"
+            "n_original = len(X_bal)\n"
+            "scores = {}\n"
+            "for name, n_rows, ratio in [\n"
+            "    ('oversample', len(X_over), ratio_over),\n"
+            "    ('undersample', len(X_under), ratio_under),\n"
+            "    ('hybrid', len(X_hyb), ratio_hyb),\n"
+            "]:\n"
+            "    dist_penalty = abs(ratio - 1.0)\n"
+            "    loss_penalty = max(0, 1.0 - n_rows / n_original) * 0.5\n"
+            "    score = dist_penalty + loss_penalty\n"
+            "    scores[name] = score\n"
+            "    print(f'{name}: ratio={ratio:.2f}, filas={n_rows}, '\n"
+            "          f'dist_penalty={dist_penalty:.3f}, loss_penalty={loss_penalty:.3f}, '\n"
+            "          f'score={score:.3f}')\n"
+            "\n"
+            "best = min(scores, key=scores.get)\n"
+            "print(f'\\n✓ Variante seleccionada: {best} (score={scores[best]:.3f})')\n"
+            "print(f'  Justificación: menor combinación de desbalance y pérdida de datos.')"
+        ))
+
     # ======================== 6. EDA VISUAL ========================
     cells.append(_cell_markdown(
         "## 6. Análisis Exploratorio — Visualizaciones\n"
         "\n"
-        "Todas las gráficas se generan computando desde los datos de entrenamiento."
+        "Las visualizaciones se generan **exclusivamente desde datos de entrenamiento** para\n"
+        "mantener la integridad del análisis. Cada gráfico está diseñado para revelar patrones\n"
+        f"relevantes para predecir `{target}`."
     ))
 
     # 6.1 Correlaciones
-    cells.append(_cell_markdown("### 6.1 Matriz de Correlaciones (Spearman)"))
+    cells.append(_cell_markdown(
+        "### 6.1 Matriz de Correlaciones (Spearman)\n"
+        "\n"
+        "**Spearman vs Pearson:** Usamos Spearman porque:\n"
+        "- No asume linealidad (detecta relaciones monótonas no lineales)\n"
+        "- Es robusta a outliers y distribuciones no normales\n"
+        "- Mide la relación ordinal entre variables\n"
+        "\n"
+        "**Interpretación:**\n"
+        "- |r| > 0.7 → correlación fuerte (posible redundancia de features)\n"
+        "- |r| > 0.5 → correlación moderada (relación significativa)\n"
+        f"- Las correlaciones con `{target}` indican predictores potenciales"
+    ))
     cells.append(_cell_code(
         "# Correlación Spearman (robusta a no-linealidad)\n"
         "numeric_df = df_train.select_dtypes(include=[np.number])\n"
@@ -362,7 +532,19 @@ def build_notebook(state: dict[str, Any], output_dir: str | Path) -> Path:
     ))
 
     # 6.3 Boxplots + outliers
-    cells.append(_cell_markdown("### 6.3 Boxplots y Detección de Outliers"))
+    cells.append(_cell_markdown(
+        "### 6.3 Boxplots y Detección de Outliers\n"
+        "\n"
+        "**Método IQR (Rango Intercuartil × 1.5):**\n"
+        "- Q1 = percentil 25, Q3 = percentil 75, IQR = Q3 - Q1\n"
+        "- Outlier inferior: x < Q1 - 1.5×IQR\n"
+        "- Outlier superior: x > Q3 + 1.5×IQR\n"
+        "\n"
+        "**Impacto en modelos:**\n"
+        "- Modelos lineales son sensibles a outliers extremos\n"
+        "- Árboles de decisión son más robustos\n"
+        "- >5% de outliers en una variable → considerar transformación o capping"
+    ))
     cells.append(_cell_code(
         "# Boxplots interactivos\n"
         "cols_to_box = numeric_cols[:8]\n"
@@ -437,7 +619,15 @@ def build_notebook(state: dict[str, Any], output_dir: str | Path) -> Path:
     cells.append(_cell_markdown(
         "### 7.1 Test de Normalidad (Shapiro-Wilk / Anderson-Darling)\n"
         "\n"
-        "Si n < 5000 usamos Shapiro-Wilk, sino Anderson-Darling."
+        "**¿Por qué evaluar normalidad?**\n"
+        "- Los tests paramétricos (t-test, ANOVA, Pearson) asumen distribución normal\n"
+        "- La regresión lineal asume normalidad de residuos para inferencia válida\n"
+        "- Si la mayoría de variables NO son normales → usar métodos no paramétricos\n"
+        "\n"
+        "**Criterios:**\n"
+        "- n < 5000: Shapiro-Wilk (mayor potencia en muestras pequeñas)\n"
+        "- n ≥ 5000: Anderson-Darling (funciona en muestras grandes)\n"
+        "- α = 0.05: p < 0.05 → rechazamos normalidad"
     ))
     cells.append(_cell_code(
         "# Test de normalidad para cada variable numérica\n"
@@ -509,7 +699,16 @@ def build_notebook(state: dict[str, Any], output_dir: str | Path) -> Path:
     cells.append(_cell_markdown(
         "### 7.3 VIF — Multicolinealidad\n"
         "\n"
-        "VIF > 10 → multicolinealidad severa | VIF > 5 → moderada"
+        "**¿Qué mide el VIF?** Cuánto se explica una variable X por las demás features.\n"
+        f"Si dos o más features están altamente correlacionadas, los coeficientes del modelo\n"
+        f"se vuelven inestables y dificultan interpretar qué variables realmente afectan a `{target}`.\n"
+        "\n"
+        "**Umbrales:**\n"
+        "| VIF | Nivel | Acción recomendada |\n"
+        "|-----|-------|--------------------|\n"
+        "| < 5 | OK | Sin problemas |\n"
+        "| 5-10 | Moderado | Monitorear |\n"
+        "| > 10 | Severo | Eliminar variable o usar regularización (Ridge/Lasso) |"
     ))
     cells.append(_cell_code(
         "# Calcular VIF para cada feature numérica\n"
@@ -569,7 +768,16 @@ def build_notebook(state: dict[str, Any], output_dir: str | Path) -> Path:
         cells.append(_cell_markdown(
             "### 7.4 Breusch-Pagan — Heteroscedasticidad\n"
             "\n"
-            "Evalúa si los residuos OLS tienen varianza constante (homoscedasticidad)."
+            "**¿Qué es la heteroscedasticidad?** Cuando la varianza de los errores del modelo\n"
+            "NO es constante a lo largo de los valores predichos. Esto invalida los errores\n"
+            "estándar OLS y los intervalos de confianza.\n"
+            "\n"
+            "**Hipótesis del test:**\n"
+            "- H₀: Varianza constante (homoscedasticidad) → OLS válido\n"
+            "- H₁: Varianza no constante → necesita corrección (HC3, WLS, o regularización)\n"
+            "\n"
+            "**Si p < 0.05:** Los errores estándar OLS están sesgados.\n"
+            f"Para el modelo de `{target}`, esto significa que las inferencias pueden ser poco fiables."
         ))
         cells.append(_cell_code(
             "# Test de Breusch-Pagan\n"
@@ -621,9 +829,16 @@ def build_notebook(state: dict[str, Any], output_dir: str | Path) -> Path:
     cells.append(_cell_markdown(
         "## 8. Importancia de Variables\n"
         "\n"
-        "Dos métodos complementarios computados desde los datos:\n"
-        "1. **Mutual Information** — no paramétrico, detecta relaciones no lineales\n"
-        "2. **Permutation Importance** — basado en modelo, mide impacto real"
+        "Usamos dos métodos complementarios para una evaluación robusta:\n"
+        "\n"
+        "| Método | Tipo | Fortaleza |\n"
+        "|--------|------|----------|\n"
+        "| **Mutual Information** | Filter (sin modelo) | Detecta relaciones no lineales, rápido |\n"
+        "| **Permutation Importance** | Wrapper (con modelo) | Mide impacto real en predicción |\n"
+        "\n"
+        "**¿Por qué combinar ambos?** MI puede sobrevalorar variables con muchos valores únicos,\n"
+        "mientras que Permutation depende del modelo elegido. Al promediar rankings, obtenemos\n"
+        f"una visión más equilibrada de qué variables son más informativas para predecir `{target}`."
     ))
 
     cells.append(_cell_markdown("### 8.1 Mutual Information"))
@@ -716,9 +931,21 @@ def build_notebook(state: dict[str, Any], output_dir: str | Path) -> Path:
         m.get("name", "?") for m in modelos if isinstance(m, dict)
     )
     cells.append(_cell_markdown(
-        "## 9. Conclusiones y Entrenamiento del Modelo\n"
-        "\n"
-        "Resumen generado a partir de los resultados computados arriba."
+        f"## 9. Conclusiones y Entrenamiento del Modelo\n"
+        f"\n"
+        f"### Conexión con las Hipótesis\n"
+        f"\n"
+        f"Los hallazgos computados arriba permiten evaluar las hipótesis de investigación:\n"
+        f"\n"
+        f"- **H1:** {hip.get('h1', 'N/A')}\n"
+        f"  - → Revisar correlaciones y feature importance para evidencia\n"
+        f"- **H2:** {hip.get('h2', 'N/A')}\n"
+        f"  - → Revisar distribuciones y patrones exploratorios\n"
+        f"- **H3:** {hip.get('h3', 'N/A')}\n"
+        f"  - → Considerar si los resultados sugieren un enfoque alternativo\n"
+        f"\n"
+        f"El modelo baseline a continuación sirve como **primera validación cuantitativa**\n"
+        f"de estas hipótesis."
     ))
 
     cells.append(_cell_code(

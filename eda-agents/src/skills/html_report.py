@@ -34,7 +34,7 @@ def _encode_image_base64(path: str) -> str:
 
 
 def _build_figures_html(figures: list[dict], output_dir: Path) -> str:
-    """Genera HTML con todas las figuras embebidas (PNG base64 + Plotly iframe) + export 400 DPI."""
+    """Genera HTML grid de figuras con lightbox navigation + export 400 DPI."""
     if not figures:
         return "<p>No se generaron figuras.</p>"
     cards: list[str] = []
@@ -48,7 +48,6 @@ def _build_figures_html(figures: list[dict], output_dir: Path) -> str:
         desc = fig.get("description", fig.get("name", ""))
 
         if fmt == "html":
-            # Embed Plotly HTML inline via iframe srcdoc
             p = Path(fig_path)
             if not p.is_absolute():
                 p = output_dir / fig_path
@@ -56,7 +55,6 @@ def _build_figures_html(figures: list[dict], output_dir: Path) -> str:
                 p = output_dir / "figures" / fig.get("name", "")
             if p.exists():
                 html_content = p.read_text(encoding="utf-8")
-                # Escape for srcdoc attribute
                 escaped = html_content.replace("&", "&amp;").replace('"', "&quot;")
                 cards.append(
                     f'<div class="fig-card fig-interactive">'
@@ -64,13 +62,14 @@ def _build_figures_html(figures: list[dict], output_dir: Path) -> str:
                     f'style="width:100%;height:500px;border:none;" loading="lazy"></iframe>'
                     f'<div class="fig-actions">'
                     f'<p class="fig-caption">{desc} (interactivo)</p>'
-                    f'<button class="btn-export" onclick="exportPlotly400DPI(\'plotly-frame-{fig_idx}\', \'{fig.get("name", "figure")}\')">Exportar PNG 400 DPI</button>'
+                    f'<button class="btn-sm" onclick="exportPlotly400DPI(\'plotly-frame-{fig_idx}\', '
+                    f'\'{fig.get("name", "figure")}\')">⬇ PNG 400 DPI</button>'
                     f'</div></div>'
                 )
                 fig_idx += 1
             continue
 
-        # PNG/JPEG: base64 embed
+        # PNG/JPEG: base64 embed with lightbox support
         p = Path(fig_path)
         if not p.is_absolute():
             p = output_dir / fig_path
@@ -85,10 +84,12 @@ def _build_figures_html(figures: list[dict], output_dir: Path) -> str:
             f'<img src="{b64}" alt="{desc}" loading="lazy">'
             f'<div class="fig-actions">'
             f'<p class="fig-caption">{desc}</p>'
-            f'<a class="btn-export" href="{b64}" download="{safe_name}_400dpi.png">Descargar PNG</a>'
+            f'<a class="btn-sm" href="{b64}" download="{safe_name}.png">⬇ PNG</a>'
             f'</div></div>'
         )
-    return "\n".join(cards) if cards else "<p>No se pudieron cargar las figuras.</p>"
+    if not cards:
+        return "<p>No se pudieron cargar las figuras.</p>"
+    return f'<div class="fig-grid">{"".join(cards)}</div>'
 
 
 def _build_json_table(data: dict) -> str:
@@ -200,11 +201,11 @@ def _build_feature_importance_html(feat_imp: dict) -> str:
 
 
 def _build_refs_html(refs: list) -> str:
-    """Genera HTML para referencias con DOI y enlaces al artículo."""
+    """Genera tabla HTML interactiva para referencias con busqueda y export Excel/CSV."""
     if not refs:
         return "<p>No se encontraron referencias.</p>"
 
-    cards: list[str] = []
+    rows: list[str] = []
     for i, r in enumerate(refs, 1):
         title = r.get("title", "Sin título")
         authors = r.get("authors", "")
@@ -212,82 +213,77 @@ def _build_refs_html(refs: list) -> str:
         doi = r.get("doi", "")
         url = r.get("url", "")
         key_finding = r.get("key_finding", "")
-        relevance = r.get("relevance", "")
         source = r.get("source", "")
+
+        source_badge = ""
+        if source == "tavily":
+            source_badge = '<span class="badge badge-ok">Web</span>'
+        elif source == "claude":
+            source_badge = '<span class="badge badge-fallback">Académico</span>'
 
         links_parts: list[str] = []
         if doi:
             doi_url = f"https://doi.org/{doi}" if not doi.startswith("http") else doi
             links_parts.append(
-                f'<a href="{doi_url}" target="_blank" rel="noopener">DOI: {doi}</a>'
+                f'<a href="{doi_url}" target="_blank" rel="noopener">DOI</a>'
             )
         if url:
             links_parts.append(
-                f'<a href="{url}" target="_blank" rel="noopener">Ver artículo ↗</a>'
+                f'<a href="{url}" target="_blank" rel="noopener">Ver ↗</a>'
             )
-        links_html = " &nbsp;|&nbsp; ".join(links_parts) if links_parts else "<em>Sin enlace disponible</em>"
+        links_html = " ".join(links_parts) if links_parts else "<em>-</em>"
 
-        source_badge = ""
-        if source == "tavily":
-            source_badge = ' <span class="badge badge-ok">Web</span>'
-        elif source == "claude":
-            source_badge = ' <span class="badge badge-fallback">Académico</span>'
-
-        meta_parts = []
-        if authors:
-            meta_parts.append(authors)
-        if year:
-            meta_parts.append(f"({year})")
-        meta_line = " ".join(meta_parts)
-
-        finding_html = f'<p class="ref-finding">{key_finding}</p>' if key_finding else ""
-        relevance_html = f'<p class="ref-relevance"><em>{relevance}</em></p>' if relevance else ""
-        meta_html = f'<p class="ref-meta">{meta_line}</p>' if meta_line else ""
-
-        cards.append(
-            f'<div class="ref-card">'
-            f'<div class="ref-number">{i}</div>'
-            f'<div class="ref-content">'
-            f'<h4>{title}{source_badge}</h4>'
-            f'{meta_html}'
-            f'{finding_html}'
-            f'{relevance_html}'
-            f'<div class="ref-links">{links_html}</div>'
-            f'</div></div>'
+        rows.append(
+            f"<tr>"
+            f"<td>{i}</td>"
+            f'<td class="ref-title">{title}</td>'
+            f"<td>{authors}</td>"
+            f"<td>{year}</td>"
+            f"<td>{source_badge}</td>"
+            f'<td class="ref-finding-cell">{key_finding}</td>'
+            f'<td class="ref-links-cell">{links_html}</td>'
+            f"</tr>"
         )
 
-    return "\n".join(cards)
+    return (
+        '<div class="table-toolbar">'
+        '<input class="search-input" id="refsSearch" type="text" '
+        'placeholder="Buscar en referencias..." '
+        "oninput=\"filterTable('refsSearch', 'refsTable')\">"
+        '<div class="table-actions">'
+        '<button class="btn-sm" onclick="exportTableExcel(\'refsTable\', '
+        "'referencias.xlsx')\">⬇ Excel</button>"
+        '<button class="btn-sm" onclick="exportTableCSV(\'refsTable\', '
+        "'referencias.csv')\">⬇ CSV</button>"
+        '</div></div>'
+        '<table class="data-table ref-table" id="refsTable"><thead><tr>'
+        '<th>#</th><th>Título</th><th>Autores</th><th>Año</th><th>Fuente</th>'
+        '<th>Hallazgo Clave</th><th>Enlaces</th>'
+        f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
+    )
 
 
 def _build_hallazgos_html(hallazgos: dict) -> str:
-    """Formatea hallazgos EDA en secciones legibles (no JSON)."""
+    """Formatea hallazgos EDA en pestanas interactivas (tabs)."""
     if not hallazgos:
         return "<p>No se generaron hallazgos.</p>"
 
-    parts: list[str] = []
-
-    # Interpretación (texto libre de Claude)
     interp = hallazgos.get("interpretation", "")
-    if interp:
-        parts.append(
-            f'<div class="hallazgo-card hallazgo-interpretation">'
-            f'<h3>🔍 Interpretación General</h3>'
-            f'<p>{interp}</p></div>'
-        )
-
-    # KPI resumen rápido
     normality = hallazgos.get("normality", {})
     outliers_data = hallazgos.get("outliers", {})
     vif_summary = hallazgos.get("vif_summary", {})
     fi = hallazgos.get("feature_importance", {})
     top = fi.get("top_features", [])
+    corr = hallazgos.get("correlations", {})
+    outliers = hallazgos.get("outliers", {})
 
+    # KPI summary row
     n_normal = sum(1 for v in normality.values() if isinstance(v, dict) and v.get("normal"))
     n_not_normal = sum(1 for v in normality.values() if isinstance(v, dict) and not v.get("normal"))
     n_outlier_vars = sum(1 for v in outliers_data.values() if isinstance(v, dict) and v.get("pct", 0) > 1)
     n_vif_flagged = vif_summary.get("n_flagged", 0)
 
-    parts.append(
+    kpi_html = (
         '<div class="kpi-row">'
         f'<div class="kpi"><div class="value">{n_normal}</div><div class="label">Vars normales</div></div>'
         f'<div class="kpi"><div class="value">{n_not_normal}</div><div class="label">Vars no normales</div></div>'
@@ -297,42 +293,42 @@ def _build_hallazgos_html(hallazgos: dict) -> str:
         '</div>'
     )
 
-    # Correlaciones
-    corr = hallazgos.get("correlations", {})
-    if corr:
-        spearman = corr.get("spearman", {})
-        if spearman:
-            # Find strong correlations (|r| > 0.5, non-diagonal)
-            strong: list[str] = []
-            seen: set[tuple[str, str]] = set()
-            for row_name, row_vals in spearman.items():
-                for col_name, val in row_vals.items():
-                    if row_name == col_name:
-                        continue
-                    pair = tuple(sorted((row_name, col_name)))
-                    if pair in seen:
-                        continue
-                    seen.add(pair)
-                    if abs(val) > 0.5:
-                        direction = "positiva" if val > 0 else "negativa"
-                        strong.append(
-                            f"<li><strong>{row_name}</strong> ↔ <strong>{col_name}</strong>: "
-                            f"r = {val:.3f} (correlación {direction} {'fuerte' if abs(val) > 0.7 else 'moderada'})</li>"
-                        )
-            if strong:
-                parts.append(
-                    '<div class="hallazgo-card">'
-                    '<h3>📊 Correlaciones Significativas (Spearman |r| &gt; 0.5)</h3>'
-                    f'<ul>{"".join(strong[:15])}</ul></div>'
-                )
-            else:
-                parts.append(
-                    '<div class="hallazgo-card"><h3>📊 Correlaciones</h3>'
-                    '<p>No se encontraron correlaciones fuertes (|r| &gt; 0.5) entre variables.</p></div>'
-                )
+    # Tab 1: Interpretacion
+    interp_html = f'<p>{interp}</p>' if interp else '<p>Sin interpretación disponible.</p>'
 
-    # Outliers
-    outliers = hallazgos.get("outliers", {})
+    # Tab 2: Correlaciones
+    corr_html = ""
+    spearman = corr.get("spearman", {}) if corr else {}
+    if spearman:
+        strong: list[str] = []
+        seen: set[tuple[str, str]] = set()
+        for row_name, row_vals in spearman.items():
+            for col_name, val in row_vals.items():
+                if row_name == col_name:
+                    continue
+                pair = tuple(sorted((row_name, col_name)))
+                if pair in seen:
+                    continue
+                seen.add(pair)
+                if abs(val) > 0.5:
+                    direction = "positiva" if val > 0 else "negativa"
+                    strength = "fuerte" if abs(val) > 0.7 else "moderada"
+                    strong.append(
+                        f"<tr><td>{row_name}</td><td>{col_name}</td>"
+                        f"<td>{val:.3f}</td><td>{direction} {strength}</td></tr>"
+                    )
+        if strong:
+            corr_html = (
+                '<table class="data-table"><thead><tr><th>Variable A</th><th>Variable B</th>'
+                f'<th>Spearman r</th><th>Tipo</th></tr></thead><tbody>{"".join(strong[:20])}</tbody></table>'
+            )
+        else:
+            corr_html = "<p>No se encontraron correlaciones fuertes (|r| &gt; 0.5).</p>"
+    else:
+        corr_html = "<p>Datos de correlación no disponibles.</p>"
+
+    # Tab 3: Outliers
+    outlier_html = ""
     if outliers:
         rows = []
         for col, info in outliers.items():
@@ -344,26 +340,38 @@ def _build_hallazgos_html(hallazgos: dict) -> str:
                 f"<tr><td>{col}</td><td>{n_out}</td><td>{pct:.1f}%</td>"
                 f'<td><span class="badge {color_class}">{severity}</span></td></tr>'
             )
-        parts.append(
-            '<div class="hallazgo-card">'
-            '<h3>⚠️ Outliers (IQR 1.5×)</h3>'
+        outlier_html = (
             '<table class="data-table"><thead><tr><th>Variable</th><th>N Outliers</th>'
-            f'<th>Porcentaje</th><th>Severidad</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+            f'<th>Porcentaje</th><th>Severidad</th></tr></thead><tbody>{"".join(rows)}</tbody></table>'
         )
+    else:
+        outlier_html = "<p>No se detectaron outliers significativos.</p>"
 
-    # Feature importance summary
+    # Tab 4: Top Features
+    feat_html = ""
     if top:
-        parts.append(
-            '<div class="hallazgo-card">'
-            '<h3>🏆 Top Features (Ranking Combinado MI + Permutation)</h3><ol>' +
-            "".join(f"<li><strong>{f}</strong></li>" for f in top) +
-            '</ol></div>'
-        )
+        feat_html = '<ol>' + "".join(f"<li><strong>{f}</strong></li>" for f in top) + '</ol>'
+    else:
+        feat_html = "<p>No se calculó ranking de features.</p>"
 
-    if not parts:
-        return "<p>No se generaron hallazgos relevantes.</p>"
+    # Build tabs
+    tabs = [
+        ("hallTab1", "Resumen", interp_html),
+        ("hallTab2", "Correlaciones", corr_html),
+        ("hallTab3", "Outliers", outlier_html),
+        ("hallTab4", "Top Features", feat_html),
+    ]
+    tab_btns = "".join(
+        f'<button class="tab-btn{" active" if i == 0 else ""}" data-tab="{tid}" '
+        f"onclick=\"switchTab('hallazgosTabs', '{tid}')\">{label}</button>"
+        for i, (tid, label, _) in enumerate(tabs)
+    )
+    tab_panes = "".join(
+        f'<div id="{tid}" class="tab-pane{" active" if i == 0 else ""}">{content}</div>'
+        for i, (tid, _, content) in enumerate(tabs)
+    )
 
-    return "\n".join(parts)
+    return kpi_html + f'<div id="hallazgosTabs"><div class="tabs">{tab_btns}</div>{tab_panes}</div>'
 
 
 def _build_normality_html(hallazgos: dict) -> str:
@@ -439,10 +447,12 @@ def _build_vif_html(vif_all: dict, vif_flags: list) -> str:
     )
 
 
-def _build_bp_html(bp_result: dict | None, correccion: str | None) -> str:
+def _build_bp_html(bp_result: dict | None, correccion: str | None, tarea: str = "regression") -> str:
     """Formatea resultados del test de Breusch-Pagan."""
+    if tarea != "regression":
+        return "<p>Test de Breusch-Pagan no aplica para clasificación.</p>"
     if not bp_result or bp_result.get("error"):
-        return "<p>Test de Breusch-Pagan no aplicable (solo regresión) o no ejecutado.</p>"
+        return "<p>Test de Breusch-Pagan no aplicable o no ejecutado.</p>"
 
     hetero = bp_result.get("heteroscedastic", False)
     bp_stat = bp_result.get("bp_statistic", 0)
@@ -490,8 +500,77 @@ def _build_bp_html(bp_result: dict | None, correccion: str | None) -> str:
     return html
 
 
+def _build_sampling_variants_html(state: dict) -> str:
+    """Genera HTML con la comparación de las 3 variantes de muestreo."""
+    sampling_variants = state.get("sampling_variants", {})
+    balanceo_log = state.get("balanceo_log", {})
+    tarea = state.get("tarea_sugerida", "")
+
+    if tarea != "classification" or not sampling_variants:
+        return ""
+
+    parts: list[str] = []
+
+    # Justificación de la selección
+    reason = balanceo_log.get("reason", "")
+    selected_method = balanceo_log.get("method", "")
+    if reason:
+        parts.append(
+            f'<div class="alert alert-ok">'
+            f'<strong>Método seleccionado: {selected_method.capitalize()}</strong><br>'
+            f'{reason}</div>'
+        )
+
+    # Tabla comparativa
+    rows = []
+    ratio_before = balanceo_log.get("ratio_before", "N/A")
+    rows.append(
+        f"<tr><td><strong>Original</strong></td>"
+        f"<td>{ratio_before}</td>"
+        f"<td>N/A</td>"
+        f"<td>-</td></tr>"
+    )
+
+    for method in ["oversample", "hybrid", "undersample"]:
+        info = sampling_variants.get(method, {})
+        if info.get("error"):
+            continue
+        ratio = info.get("ratio_after", "N/A")
+        n_rows = info.get("n_rows", "N/A")
+        desc = info.get("description", "")
+        selected = info.get("selected", False)
+        badge = ' <span class="badge badge-ok">★ SELECCIONADO</span>' if selected else ""
+        name = f"<strong>{method.capitalize()}</strong>{badge}"
+        ratio_fmt = f"{ratio:.2f}" if isinstance(ratio, (int, float)) else ratio
+        rows.append(
+            f"<tr><td>{name}</td>"
+            f"<td>{ratio_fmt}</td>"
+            f"<td>{n_rows}</td>"
+            f"<td>{desc}</td></tr>"
+        )
+
+    if rows:
+        parts.append(
+            '<table class="data-table"><thead><tr>'
+            '<th>Variante</th><th>Ratio (max/min)</th><th>N filas</th><th>Descripción</th>'
+            f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
+        )
+
+    # Distribución de clases por variante
+    for method in ["oversample", "hybrid", "undersample"]:
+        info = sampling_variants.get(method, {})
+        dist = info.get("class_distribution", {})
+        if dist and not info.get("error"):
+            selected = info.get("selected", False)
+            badge = " ★" if selected else ""
+            dist_items = ", ".join(f"Clase {k}: {v}" for k, v in dist.items())
+            parts.append(f"<p><strong>{method.capitalize()}{badge}:</strong> {dist_items}</p>")
+
+    return "\n".join(parts) if parts else ""
+
+
 def _build_download_buttons(state: dict, output_dir: Path) -> str:
-    """Genera botones de descarga para train y test datasets."""
+    """Genera botones de descarga para train y test datasets + variantes de muestreo."""
     parts: list[str] = []
 
     train_final = state.get("dataset_train_final", "")
@@ -509,6 +588,15 @@ def _build_download_buttons(state: dict, output_dir: Path) -> str:
         datasets.append(("Test (Final)", test_final))
     elif test_proc:
         datasets.append(("Test (Procesado)", test_proc))
+
+    # Variantes de muestreo (solo clasificación)
+    sampling_variants = state.get("sampling_variants", {})
+    for method in ["oversample", "undersample", "hybrid"]:
+        info = sampling_variants.get(method, {})
+        path = info.get("path", "")
+        if path and not info.get("error"):
+            selected_tag = " ★" if info.get("selected") else ""
+            datasets.append((f"Train {method.capitalize()}{selected_tag}", path))
 
     if not datasets:
         return "<p>No hay datasets disponibles para descarga.</p>"
@@ -543,31 +631,42 @@ _CSS = """
 :root {
     --bg: #f0f2f5; --bg2: #ffffff; --text: #212529; --accent: #2563eb;
     --accent2: #1d4ed8; --accent-light: #dbeafe; --sidebar-bg: #1e293b;
-    --sidebar-text: #e2e8f0; --border: #e2e8f0; --card-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08);
+    --sidebar-text: #e2e8f0; --border: #e2e8f0;
+    --card-shadow: 0 2px 8px rgba(0,0,0,0.08);
     --success: #16a34a; --success-bg: #dcfce7; --warning: #d97706; --warning-bg: #fef3c7;
     --danger: #dc2626; --danger-bg: #fee2e2; --radius: 12px;
+    --gradient-accent: linear-gradient(135deg, #2563eb, #7c3aed);
 }
 [data-theme="dark"] {
     --bg: #0f172a; --bg2: #1e293b; --text: #e2e8f0; --accent: #60a5fa;
     --accent2: #93c5fd; --accent-light: #1e3a5f; --sidebar-bg: #0f172a;
-    --sidebar-text: #e2e8f0; --border: #334155; --card-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    --sidebar-text: #e2e8f0; --border: #334155;
+    --card-shadow: 0 2px 8px rgba(0,0,0,0.4);
     --success: #4ade80; --success-bg: #14532d; --warning: #fbbf24; --warning-bg: #451a03;
     --danger: #f87171; --danger-bg: #450a0a;
+    --gradient-accent: linear-gradient(135deg, #60a5fa, #a78bfa);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
        background: var(--bg); color: var(--text); display: flex; min-height: 100vh;
        line-height: 1.6; }
+/* Scroll progress */
+.scroll-progress { position: fixed; top: 0; left: 0; width: 0%; height: 3px;
+    background: var(--gradient-accent); z-index: 999; transition: width 0.05s linear; }
+/* Sidebar */
 .sidebar { width: 280px; background: var(--sidebar-bg); color: var(--sidebar-text);
            padding: 24px 0; position: fixed; height: 100vh; overflow-y: auto; z-index: 10;
            border-right: 1px solid rgba(255,255,255,0.05); }
 .sidebar h2 { padding: 0 24px 16px; font-size: 1.1rem; letter-spacing: 0.5px;
               border-bottom: 1px solid rgba(255,255,255,0.1); margin-bottom: 12px; }
-.sidebar a { display: block; padding: 10px 24px; color: var(--sidebar-text); text-decoration: none;
+.sidebar a { display: flex; align-items: center; gap: 10px; padding: 10px 24px;
+             color: var(--sidebar-text); text-decoration: none;
              font-size: 0.88rem; transition: all 0.2s; border-left: 3px solid transparent; }
 .sidebar a:hover, .sidebar a.active { background: rgba(255,255,255,0.08);
     border-left-color: var(--accent); color: var(--accent); }
-.main { margin-left: 280px; padding: 32px 48px; flex: 1; max-width: 1140px; }
+.nav-icon { font-size: 1rem; width: 22px; text-align: center; }
+/* Main */
+.main { margin-left: 280px; padding: 32px 48px; flex: 1; max-width: 1200px; }
 .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px;
           padding-bottom: 16px; border-bottom: 2px solid var(--accent); }
 .header h1 { font-size: 1.5rem; font-weight: 700; }
@@ -575,94 +674,323 @@ body { font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
                 border-radius: 8px; background: var(--bg2); color: var(--text);
                 font-size: 0.85rem; transition: all 0.2s; }
 .theme-toggle:hover { border-color: var(--accent); }
-section { background: var(--bg2); border-radius: var(--radius); padding: 28px; margin-bottom: 24px;
-          box-shadow: var(--card-shadow); border: 1px solid var(--border); }
-section h2 { color: var(--accent); font-size: 1.2rem; margin-bottom: 18px; font-weight: 700;
-             padding-bottom: 10px; border-bottom: 2px solid var(--accent-light); }
+/* Sections — collapsible */
+section { background: var(--bg2); border-radius: var(--radius); padding: 0; margin-bottom: 24px;
+          box-shadow: var(--card-shadow); border: 1px solid var(--border); overflow: hidden;
+          animation: fadeIn 0.3s ease; }
+.section-header { display: flex; justify-content: space-between; align-items: center;
+    cursor: pointer; user-select: none; padding: 22px 28px; transition: background 0.2s; }
+.section-header:hover { background: var(--accent-light); }
+.section-header h2 { color: var(--accent); font-size: 1.2rem; margin: 0; font-weight: 700;
+    padding-bottom: 0; border-bottom: none; }
+.section-header .chevron { transition: transform 0.3s ease; font-size: 1.1rem;
+    color: var(--accent); opacity: 0.6; }
+.section-header.collapsed .chevron { transform: rotate(-90deg); }
+.section-content { padding: 0 28px 24px; transition: max-height 0.4s ease, opacity 0.3s ease,
+    padding 0.3s ease; overflow: hidden; }
+.section-content.collapsed { max-height: 0 !important; opacity: 0; padding-top: 0; padding-bottom: 0; }
 section h3 { color: var(--accent2); margin: 18px 0 10px; font-size: 1rem; font-weight: 600; }
+/* Tables */
 .data-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.88rem; }
 .data-table th { background: var(--accent); color: white; padding: 10px 14px; text-align: left;
                  cursor: pointer; font-weight: 600; font-size: 0.82rem; text-transform: uppercase;
-                 letter-spacing: 0.5px; }
+                 letter-spacing: 0.5px; position: sticky; top: 0; }
 .data-table th:hover { background: var(--accent2); }
 .data-table td { padding: 10px 14px; border-bottom: 1px solid var(--border); }
 .data-table tr:hover { background: var(--accent-light); }
-.fig-card { display: inline-block; margin: 10px; text-align: center; vertical-align: top; }
-.fig-card img { max-width: 480px; border-radius: 8px; box-shadow: var(--card-shadow); cursor: pointer;
-                transition: transform 0.2s; }
-.fig-card img:hover { transform: scale(1.02); }
-.fig-interactive { width: 100%; margin: 14px 0; display: block; }
-.fig-interactive iframe { border-radius: 8px; box-shadow: var(--card-shadow); }
-.fig-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 10px; }
-.fig-caption { font-size: 0.85rem; color: var(--accent2); }
+.table-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    flex-wrap: wrap; margin-bottom: 12px; }
+.search-input { flex: 1; min-width: 200px; padding: 9px 16px; border: 1px solid var(--border);
+    border-radius: 8px; font-size: 0.88rem; background: var(--bg); color: var(--text);
+    transition: border-color 0.2s; }
+.search-input:focus { outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-light); }
+.table-actions { display: flex; gap: 8px; }
+.btn-sm { padding: 7px 14px; border-radius: 6px; font-size: 0.8rem; font-weight: 600;
+    cursor: pointer; text-decoration: none; border: 1px solid var(--accent); color: var(--accent);
+    background: transparent; transition: all 0.2s; white-space: nowrap; }
+.btn-sm:hover { background: var(--accent); color: white; }
+/* Tabs */
+.tabs { display: flex; gap: 0; border-bottom: 2px solid var(--border); margin-bottom: 16px;
+    overflow-x: auto; }
+.tab-btn { padding: 10px 20px; border: none; background: none; cursor: pointer; font-size: 0.88rem;
+    font-weight: 600; color: var(--text); opacity: 0.55; border-bottom: 3px solid transparent;
+    margin-bottom: -2px; transition: all 0.2s; white-space: nowrap; }
+.tab-btn.active { opacity: 1; color: var(--accent); border-bottom-color: var(--accent); }
+.tab-btn:hover { opacity: 0.85; background: var(--accent-light); }
+.tab-pane { display: none; animation: fadeIn 0.3s ease; }
+.tab-pane.active { display: block; }
+/* Figure grid + cards */
+.fig-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 20px; }
+.fig-card { background: var(--bg); border-radius: 10px; overflow: hidden;
+    border: 1px solid var(--border); transition: box-shadow 0.2s, transform 0.2s; }
+.fig-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.12); transform: translateY(-2px); }
+.fig-card img { width: 100%; display: block; cursor: pointer; transition: opacity 0.2s; }
+.fig-card img:hover { opacity: 0.92; }
+.fig-interactive { grid-column: 1 / -1; }
+.fig-interactive iframe { border-radius: 8px; }
+.fig-actions { display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; gap: 10px; }
+.fig-caption { font-size: 0.85rem; color: var(--accent2); margin: 0; }
+/* Buttons */
 .btn-export, .btn-download { display: inline-block; padding: 6px 16px; border-radius: 6px;
     font-size: 0.8rem; font-weight: 600; cursor: pointer; text-decoration: none;
     border: 1px solid var(--accent); color: var(--accent); background: transparent;
     transition: all 0.2s; white-space: nowrap; }
 .btn-export:hover, .btn-download:hover { background: var(--accent); color: white; }
-.download-row { display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0; }
-.btn-download { padding: 12px 24px; font-size: 0.9rem; border-radius: 8px;
+.download-row { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; align-items: center; }
+.btn-download { padding: 12px 24px; font-size: 0.88rem; border-radius: 8px;
     background: var(--accent); color: white; border: none; }
-.btn-download:hover { background: var(--accent2); }
+.btn-download:hover { background: var(--accent2); transform: translateY(-1px); }
+/* KPI cards — enhanced */
+.kpi-row { display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0; }
+.kpi { background: var(--bg); border-radius: 12px; padding: 20px 24px; min-width: 140px;
+       text-align: center; box-shadow: var(--card-shadow); border: 1px solid var(--border);
+       transition: transform 0.2s; position: relative; overflow: hidden; }
+.kpi:hover { transform: translateY(-2px); }
+.kpi::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: var(--gradient-accent); }
+.kpi .value { font-size: 1.6rem; font-weight: 700; color: var(--accent); }
+.kpi .label { font-size: 0.78rem; color: var(--text); opacity: 0.65; margin-top: 4px; }
+/* Badges */
 .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 0.78rem; font-weight: 600; }
 .badge-ok { background: var(--success-bg); color: var(--success); }
 .badge-error { background: var(--danger-bg); color: var(--danger); }
 .badge-fallback { background: var(--warning-bg); color: var(--warning); }
-.kpi-row { display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0; }
-.kpi { background: var(--bg); border-radius: 10px; padding: 18px 22px; min-width: 140px;
-       text-align: center; box-shadow: var(--card-shadow); border: 1px solid var(--border); }
-.kpi .value { font-size: 1.6rem; font-weight: 700; color: var(--accent); }
-.kpi .label { font-size: 0.78rem; color: var(--text); opacity: 0.65; margin-top: 4px; }
+/* Hallazgo cards */
 .hallazgo-card { background: var(--bg); border-radius: 10px; padding: 18px 22px;
     margin: 12px 0; border-left: 4px solid var(--accent); }
 .hallazgo-card h3 { color: var(--accent); margin: 0 0 10px; font-size: 0.95rem; }
+.hallazgo-interpretation { border-left-color: var(--success); }
+/* Alerts */
 .alert { padding: 14px 20px; border-radius: 8px; margin: 12px 0; font-size: 0.9rem; }
 .alert-warning { background: var(--warning-bg); border-left: 4px solid var(--warning); }
 .alert-ok { background: var(--success-bg); border-left: 4px solid var(--success); }
-.ref-card { display: flex; gap: 14px; background: var(--bg); border-radius: 10px; padding: 16px 20px;
-    margin: 10px 0; border-left: 4px solid var(--accent); transition: box-shadow 0.2s; }
-.ref-card:hover { box-shadow: var(--card-shadow); }
-.ref-number { font-size: 1.3rem; font-weight: 700; color: var(--accent); min-width: 30px;
-    display: flex; align-items: flex-start; justify-content: center; padding-top: 2px; }
-.ref-content { flex: 1; }
-.ref-content h4 { font-size: 0.95rem; margin-bottom: 4px; line-height: 1.4; }
-.ref-meta { font-size: 0.82rem; color: var(--text); opacity: 0.7; margin-bottom: 6px; }
-.ref-finding { font-size: 0.88rem; margin-bottom: 4px; }
-.ref-relevance { font-size: 0.82rem; opacity: 0.75; margin-bottom: 6px; }
-.ref-links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
-.ref-links a { font-size: 0.82rem; color: var(--accent); text-decoration: none; font-weight: 600;
-    padding: 3px 10px; border: 1px solid var(--accent); border-radius: 6px; transition: all 0.2s; }
-.ref-links a:hover { background: var(--accent); color: white; }
-.hallazgo-interpretation { border-left-color: var(--success); }
+/* Ref table */
+.ref-table td { vertical-align: top; }
+.ref-table .ref-title { font-weight: 600; color: var(--accent); }
+.ref-table .ref-finding-cell { font-size: 0.85rem; max-width: 300px; }
+.ref-links-cell a { font-size: 0.78rem; color: var(--accent); text-decoration: none; font-weight: 600;
+    padding: 2px 8px; border: 1px solid var(--accent); border-radius: 4px; transition: all 0.2s;
+    display: inline-block; margin: 2px 0; }
+.ref-links-cell a:hover { background: var(--accent); color: white; }
+/* Code blocks */
 pre { background: var(--bg); padding: 14px; border-radius: 8px; overflow-x: auto;
       font-size: 0.85rem; border: 1px solid var(--border); }
-.modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-         background: rgba(0,0,0,0.85); z-index: 100; justify-content: center; align-items: center; }
-.modal img { max-width: 90%; max-height: 90%; border-radius: 8px; }
-.modal.show { display: flex; }
+/* Lightbox */
+.lightbox { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.92); z-index: 200; justify-content: center; align-items: center;
+    flex-direction: column; }
+.lightbox.show { display: flex; }
+.lightbox img { max-width: 88%; max-height: 78%; border-radius: 8px; object-fit: contain; }
+.lb-nav { position: absolute; top: 50%; transform: translateY(-50%); padding: 14px 18px;
+    background: rgba(255,255,255,0.12); color: white; border: none; cursor: pointer;
+    font-size: 1.6rem; border-radius: 8px; transition: background 0.2s;
+    backdrop-filter: blur(4px); }
+.lb-nav:hover { background: rgba(255,255,255,0.25); }
+.lb-prev { left: 20px; }
+.lb-next { right: 20px; }
+.lb-close { position: absolute; top: 16px; right: 24px; color: white; font-size: 2rem;
+    cursor: pointer; background: none; border: none; opacity: 0.7; transition: opacity 0.2s; }
+.lb-close:hover { opacity: 1; }
+.lb-caption { color: rgba(255,255,255,0.85); margin-top: 14px; font-size: 0.9rem;
+    text-align: center; max-width: 80%; }
+.lb-counter { color: rgba(255,255,255,0.5); font-size: 0.8rem; margin-top: 6px; }
+/* Toast */
+.toast { position: fixed; bottom: 30px; right: 30px; padding: 14px 28px; border-radius: 10px;
+    background: var(--success); color: white; font-weight: 600; font-size: 0.9rem;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.25); z-index: 300;
+    transform: translateY(100px); opacity: 0; transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: none; }
+.toast.show { transform: translateY(0); opacity: 1; }
+/* Lists */
 ul, ol { margin-left: 22px; }
 li { margin-bottom: 6px; }
-@media (max-width: 768px) {
+/* Animations */
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); } }
+/* Responsive */
+@media (max-width: 900px) {
     .sidebar { display: none; }
     .main { margin-left: 0; padding: 16px; }
-    .fig-card img { max-width: 100%; }
+    .fig-grid { grid-template-columns: 1fr; }
     .kpi-row { justify-content: center; }
+}
+/* Print */
+@media print {
+    .sidebar, .theme-toggle, .btn-export, .btn-download, .btn-sm, .download-row,
+    .scroll-progress, .lightbox, .toast, .search-input, .table-toolbar,
+    .section-header .chevron, .fig-actions { display: none !important; }
+    .main { margin-left: 0 !important; padding: 10px !important; max-width: 100% !important; }
+    section { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd !important; }
+    .section-content { max-height: none !important; opacity: 1 !important;
+        padding: 12px 20px !important; }
+    .fig-grid { grid-template-columns: 1fr 1fr; }
+    body { font-size: 10pt; }
+    .kpi::before { display: none; }
 }
 """
 
 _JS = """
+/* === Theme === */
 function toggleTheme() {
-    const body = document.documentElement;
-    const current = body.getAttribute('data-theme') || 'light';
-    body.setAttribute('data-theme', current === 'light' ? 'dark' : 'light');
-    localStorage.setItem('theme', current === 'light' ? 'dark' : 'light');
+    var h = document.documentElement;
+    var cur = h.getAttribute('data-theme') || 'light';
+    var next = cur === 'light' ? 'dark' : 'light';
+    h.setAttribute('data-theme', next);
+    localStorage.setItem('theme', next);
 }
-(function() {
-    const saved = localStorage.getItem('theme');
-    if (saved) document.documentElement.setAttribute('data-theme', saved);
-})();
+(function(){ var s = localStorage.getItem('theme'); if(s) document.documentElement.setAttribute('data-theme', s); })();
 
-// Export Plotly chart at 400 DPI
+/* === Scroll Progress === */
+window.addEventListener('scroll', function() {
+    var h = document.documentElement;
+    var pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+    var bar = document.getElementById('scrollProgress');
+    if (bar) bar.style.width = Math.min(pct, 100) + '%';
+});
+
+/* === Collapsible Sections === */
+function toggleSection(el) {
+    var content = el.nextElementSibling;
+    if (!content) return;
+    el.classList.toggle('collapsed');
+    if (el.classList.contains('collapsed')) {
+        content.style.maxHeight = content.scrollHeight + 'px';
+        content.offsetHeight;
+        content.classList.add('collapsed');
+    } else {
+        content.classList.remove('collapsed');
+        content.style.maxHeight = content.scrollHeight + 'px';
+        setTimeout(function(){ content.style.maxHeight = 'none'; }, 400);
+    }
+}
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.section-content:not(.collapsed)').forEach(function(el) {
+        el.style.maxHeight = 'none';
+    });
+});
+
+/* === Tabs === */
+function switchTab(groupId, tabId) {
+    var group = document.getElementById(groupId);
+    if (!group) return;
+    group.querySelectorAll('.tab-btn').forEach(function(b){ b.classList.remove('active'); });
+    group.querySelectorAll('.tab-pane').forEach(function(p){ p.classList.remove('active'); });
+    var btn = group.querySelector('[data-tab=\"' + tabId + '\"]');
+    if (btn) btn.classList.add('active');
+    var pane = document.getElementById(tabId);
+    if (pane) pane.classList.add('active');
+}
+
+/* === Table Search / Filter === */
+function filterTable(inputId, tableId) {
+    var q = document.getElementById(inputId).value.toLowerCase();
+    document.querySelectorAll('#' + tableId + ' tbody tr').forEach(function(row) {
+        row.style.display = row.textContent.toLowerCase().indexOf(q) > -1 ? '' : 'none';
+    });
+}
+
+/* === Toast Notification === */
+function showToast(msg) {
+    var t = document.getElementById('toast');
+    if (!t) return;
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(function(){ t.classList.remove('show'); }, 3000);
+}
+
+/* === Export Table as CSV === */
+function exportTableCSV(tableId, filename) {
+    var table = document.getElementById(tableId);
+    if (!table) return;
+    var csv = [];
+    table.querySelectorAll('tr').forEach(function(r) {
+        var row = [];
+        r.querySelectorAll('th,td').forEach(function(c){ row.push('\"' + c.textContent.replace(/\"/g, '\"\"') + '\"'); });
+        csv.push(row.join(','));
+    });
+    var blob = new Blob(['\\ufeff' + csv.join('\\n')], {type:'text/csv;charset=utf-8;'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+    showToast('\\u2713 ' + filename + ' descargado');
+}
+
+/* === Export Table as Excel (SheetJS on demand) === */
+function exportTableExcel(tableId, filename) {
+    function run() {
+        var table = document.getElementById(tableId);
+        var wb = XLSX.utils.table_to_book(table, {sheet:'Datos'});
+        XLSX.writeFile(wb, filename);
+        showToast('\\u2713 ' + filename + ' descargado');
+    }
+    if (typeof XLSX !== 'undefined') { run(); return; }
+    var s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.crossOrigin = 'anonymous';
+    s.onload = run;
+    s.onerror = function(){ alert('No se pudo cargar SheetJS. Verifica tu conexion a internet.'); };
+    document.head.appendChild(s);
+}
+
+/* === ZIP Download (JSZip on demand) === */
+function downloadAllZip(zipName) {
+    function run() {
+        var zip = new JSZip();
+        document.querySelectorAll('.btn-download[href^=\"data:\"]').forEach(function(a) {
+            var fname = a.getAttribute('download');
+            var raw = a.href.split(',')[1];
+            try { zip.file(fname, atob(raw)); } catch(e) {}
+        });
+        zip.generateAsync({type:'blob'}).then(function(blob) {
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a'); a.href = url; a.download = zipName || 'datasets.zip'; a.click();
+            URL.revokeObjectURL(url);
+            showToast('\\u2713 ' + (zipName || 'datasets.zip') + ' descargado');
+        });
+    }
+    if (typeof JSZip !== 'undefined') { run(); return; }
+    var s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+    s.crossOrigin = 'anonymous';
+    s.onload = run;
+    s.onerror = function(){ alert('No se pudo cargar JSZip. Verifica tu conexion a internet.'); };
+    document.head.appendChild(s);
+}
+
+/* === Lightbox with Navigation === */
+var _lbImgs = [], _lbIdx = 0;
+function openLightbox(idx) {
+    _lbIdx = idx;
+    var lb = document.getElementById('lightbox');
+    if (!lb) return;
+    document.getElementById('lbImg').src = _lbImgs[idx].src;
+    document.getElementById('lbCaption').textContent = _lbImgs[idx].caption || '';
+    document.getElementById('lbCounter').textContent = (idx+1) + ' / ' + _lbImgs.length;
+    lb.classList.add('show');
+    document.body.style.overflow = 'hidden';
+}
+function closeLightbox() {
+    var lb = document.getElementById('lightbox');
+    if (lb) lb.classList.remove('show');
+    document.body.style.overflow = '';
+}
+function lbNav(dir) {
+    _lbIdx = (_lbIdx + dir + _lbImgs.length) % _lbImgs.length;
+    document.getElementById('lbImg').src = _lbImgs[_lbIdx].src;
+    document.getElementById('lbCaption').textContent = _lbImgs[_lbIdx].caption || '';
+    document.getElementById('lbCounter').textContent = (_lbIdx+1) + ' / ' + _lbImgs.length;
+}
+document.addEventListener('keydown', function(e) {
+    var lb = document.getElementById('lightbox');
+    if (!lb || !lb.classList.contains('show')) return;
+    if (e.key === 'Escape') closeLightbox();
+    if (e.key === 'ArrowLeft') lbNav(-1);
+    if (e.key === 'ArrowRight') lbNav(1);
+});
+
+/* === Plotly 400 DPI Export === */
 function exportPlotly400DPI(frameId, name) {
     try {
         var iframe = document.getElementById(frameId);
@@ -673,58 +1001,57 @@ function exportPlotly400DPI(frameId, name) {
                 format: 'png', width: 3200, height: 2400, scale: 3,
                 filename: name.replace('.html', '') + '_400dpi'
             });
+            showToast('Exportando ' + name + ' a 400 DPI...');
         } else {
-            alert('Esperando carga de la gráfica. Intenta de nuevo en unos segundos.');
+            alert('Esperando carga de la grafica. Intenta de nuevo en unos segundos.');
         }
     } catch(e) {
         alert('Error al exportar: ' + e.message);
     }
 }
 
-// Scroll spy for sidebar
+/* === Scroll Spy === */
 document.addEventListener('DOMContentLoaded', function() {
-    const sections = document.querySelectorAll('section[id]');
-    const links = document.querySelectorAll('.sidebar a');
+    var sections = document.querySelectorAll('section[id]');
+    var links = document.querySelectorAll('.sidebar a');
     window.addEventListener('scroll', function() {
-        let current = '';
-        sections.forEach(s => { if (window.scrollY >= s.offsetTop - 100) current = s.id; });
-        links.forEach(a => {
+        var current = '';
+        sections.forEach(function(s) { if (window.scrollY >= s.offsetTop - 120) current = s.id; });
+        links.forEach(function(a) {
             a.classList.remove('active');
             if (a.getAttribute('href') === '#' + current) a.classList.add('active');
         });
     });
+    /* Init lightbox image list */
+    document.querySelectorAll('.fig-card img').forEach(function(img, i) {
+        _lbImgs.push({src: img.src, caption: img.alt || ''});
+        img.style.cursor = 'pointer';
+        img.onclick = function() { openLightbox(i); };
+    });
 });
 
-// Sortable tables
+/* === Sortable Tables === */
 document.addEventListener('click', function(e) {
-    if (e.target.tagName === 'TH') {
-        const th = e.target;
-        const table = th.closest('table');
-        const idx = Array.from(th.parentNode.children).indexOf(th);
-        const tbody = table.querySelector('tbody');
-        const rows = Array.from(tbody.querySelectorAll('tr'));
-        const asc = th.dataset.sort !== 'asc';
+    if (e.target.tagName === 'TH' && e.target.closest('.data-table')) {
+        var th = e.target;
+        var table = th.closest('table');
+        var idx = Array.from(th.parentNode.children).indexOf(th);
+        var tbody = table.querySelector('tbody');
+        if (!tbody) return;
+        var rows = Array.from(tbody.querySelectorAll('tr'));
+        var asc = th.dataset.sort !== 'asc';
+        th.parentNode.querySelectorAll('th').forEach(function(h){ delete h.dataset.sort; });
         th.dataset.sort = asc ? 'asc' : 'desc';
-        rows.sort((a, b) => {
-            const av = a.children[idx]?.textContent || '';
-            const bv = b.children[idx]?.textContent || '';
-            const an = parseFloat(av), bn = parseFloat(bv);
+        rows.sort(function(a, b) {
+            var av = (a.children[idx] || {}).textContent || '';
+            var bv = (b.children[idx] || {}).textContent || '';
+            var an = parseFloat(av), bn = parseFloat(bv);
             if (!isNaN(an) && !isNaN(bn)) return asc ? an - bn : bn - an;
             return asc ? av.localeCompare(bv) : bv.localeCompare(av);
         });
-        rows.forEach(r => tbody.appendChild(r));
+        rows.forEach(function(r){ tbody.appendChild(r); });
     }
 });
-
-// Image modal
-document.addEventListener('click', function(e) {
-    if (e.target.matches('.fig-card img')) {
-        const modal = document.getElementById('imgModal');
-        document.getElementById('modalImg').src = e.target.src;
-        modal.classList.add('show');
-    }
-});
-function closeModal() { document.getElementById('imgModal').classList.remove('show'); }
 """
 
 
@@ -815,7 +1142,10 @@ def build_html_report(state: dict[str, Any], output_dir: str | Path) -> Path:
     warns = state.get("advertencias", [])
     warns_html = "<ul>" + "".join(f"<li>{w}</li>" for w in warns) + "</ul>" if warns else "<p>Ninguna.</p>"
 
-    # Sidebar links
+    # Sidebar links — filtrados según tarea
+    is_classification = tarea == "classification"
+    is_regression = tarea == "regression"
+
     nav_items = [
         ("resumen", "Resumen Ejecutivo"),
         ("literatura", "Literatura"),
@@ -824,20 +1154,175 @@ def build_html_report(state: dict[str, Any], output_dir: str | Path) -> Path:
         ("descargas", "Descargar Datos"),
         ("perfil", "Perfil de Columnas"),
         ("preprocesamiento", "Preprocesamiento"),
+    ]
+    if is_classification:
+        nav_items.append(("muestreo", "Variantes de Muestreo"))
+    nav_items.extend([
         ("hallazgos", "Hallazgos EDA"),
         ("normalidad", "Normalidad"),
         ("vif", "VIF — Multicolinealidad"),
-        ("breusch_pagan", "Breusch-Pagan"),
+    ])
+    if is_regression:
+        nav_items.append(("breusch_pagan", "Breusch-Pagan"))
+    nav_items.extend([
         ("importancia", "Feature Importance"),
-        ("timeseries", "Series de Tiempo"),
+    ])
+    if state.get("flag_timeseries"):
+        nav_items.append(("timeseries", "Series de Tiempo"))
+    nav_items.extend([
         ("decision", "Decision"),
         ("modelos", "Modelos"),
         ("figuras", "Visualizaciones"),
         ("advertencias", "Advertencias"),
         ("pasos", "Proximos Pasos"),
         ("agentes", "Estado Agentes"),
-    ]
-    nav_html = "\n".join(f'<a href="#{sid}">{label}</a>' for sid, label in nav_items)
+    ])
+    nav_icons = {
+        "resumen": "📋", "literatura": "📚", "hipotesis": "🔬",
+        "dataset": "📊", "descargas": "⬇", "perfil": "📐",
+        "preprocesamiento": "⚙", "muestreo": "🔄", "hallazgos": "🔍",
+        "normalidad": "📈", "vif": "🔗", "breusch_pagan": "📉",
+        "importancia": "⭐", "timeseries": "⏰", "decision": "🎯",
+        "modelos": "🤖", "figuras": "🖼", "advertencias": "⚠",
+        "pasos": "👣", "agentes": "🔧",
+    }
+    nav_html = "\n".join(
+        f'<a href="#{sid}"><span class="nav-icon">{nav_icons.get(sid, "•")}</span>{label}</a>'
+        for sid, label in nav_items
+    )
+
+    # Helper for collapsible sections
+    def _sec(sid: str, title: str, content: str) -> str:
+        return (
+            f'<section id="{sid}">'
+            f'<div class="section-header" onclick="toggleSection(this)">'
+            f'<h2>{title}</h2><span class="chevron">▼</span></div>'
+            f'<div class="section-content">\n{content}\n</div></section>'
+        )
+
+    # Build section content blocks
+    resumen_content = (
+        f'<p><strong>Pregunta:</strong> {question}</p>'
+        '<div class="kpi-row">'
+        f'<div class="kpi"><div class="value">{dataset_size}</div><div class="label">Filas</div></div>'
+        f'<div class="kpi"><div class="value">{n_features}</div><div class="label">Columnas</div></div>'
+        f'<div class="kpi"><div class="value">{tarea}</div><div class="label">Tarea</div></div>'
+        f'<div class="kpi"><div class="value">{model_family}</div><div class="label">Familia</div></div>'
+        f'<div class="kpi"><div class="value">{metrica}</div><div class="label">Métrica</div></div>'
+        f'<div class="kpi"><div class="value">{n_figures}</div><div class="label">Figuras</div></div>'
+        '</div>'
+        f'<p><strong>Tipo de datos:</strong> {data_type} | <strong>Target:</strong> {target} | <strong>Desbalance:</strong> {desbalance_str}</p>'
+    )
+
+    lit_content = (
+        '<h3>Ecuaciones PICO</h3>'
+        '<ul>' + "".join(f"<li><code>{eq}</code></li>" for eq in state.get('search_equations', [])) + '</ul>'
+        '<h3>Referencias</h3>'
+        + refs_html
+    )
+
+    dataset_content = _build_json_table({
+        "Filas": dataset_size, "Target": target, "Tipo": data_type,
+        "Desbalance": desbalance_str, "Serie temporal": state.get('flag_timeseries', False),
+    })
+
+    descargas_content = (
+        '<p>Datasets listos para modelamiento (con encoding y preprocesamiento aplicados):</p>'
+        + _build_download_buttons(state, output_dir)
+        + '<div style="margin-top:12px;">'
+        '<button class="btn-sm" onclick="downloadAllZip(\'datasets.zip\')">📦 Descargar todo (.zip)</button>'
+        '</div>'
+    )
+
+    prepro_content = (
+        '<h3>Encoding</h3>'
+        + _build_encoding_table(state.get('encoding_log', {}))
+        + '<h3>Features nuevas</h3>'
+        f'<p>{state.get("features_nuevas", []) or "Ninguna"}</p>'
+        '<h3>Balanceo</h3>'
+        f'<pre>{json.dumps(state.get("balanceo_log", {}), indent=2, ensure_ascii=False)}</pre>'
+    )
+
+    muestreo_content = (
+        '<p>Se generaron las 3 variantes de muestreo para comparar y seleccionar la mejor estrategia de balanceo.</p>'
+        + _build_sampling_variants_html(state)
+    )
+
+    hallazgos_content = _build_hallazgos_html(hallazgos)
+
+    normalidad_content = (
+        '<p>Evaluación de la distribución normal de variables numéricas (Shapiro-Wilk / Anderson-Darling, α = 0.05).</p>'
+        + _build_normality_html(hallazgos)
+    )
+
+    vif_content = (
+        '<p>Análisis de multicolinealidad mediante VIF. Valores &gt; 10 indican multicolinealidad severa.</p>'
+        + _build_vif_html(vif_all, vif_flags)
+    )
+
+    bp_content = (
+        '<p>Evalúa si la varianza de los residuos es constante (homoscedasticidad) en el modelo de regresión.</p>'
+        + _build_bp_html(bp_result, correccion, tarea)
+    )
+
+    fi_content = _build_feature_importance_html(state.get('feature_importance', {}))
+
+    decision_content = _build_json_table({
+        "Tarea": tarea, "Model family": model_family,
+        "Técnica hiperparámetros": hyper, "Métrica principal": metrica,
+    })
+
+    modelos_content = _build_models_table(state.get('modelos_recomendados', []))
+
+    figuras_content = _build_figures_html(figures, output_dir)
+
+    pasos_content = (
+        '<ol>'
+        '<li>Entrenar modelos recomendados con los hiperparámetros sugeridos</li>'
+        '<li>Validar con cross-validation sobre train set</li>'
+        '<li>Evaluar en test set con métricas seleccionadas</li>'
+        '<li>Iterar según resultados</li>'
+        '</ol>'
+    )
+
+    # Assemble sections
+    sections_html = "\n".join([
+        _sec("resumen", "📋 Resumen Ejecutivo", resumen_content),
+        _sec("literatura", "📚 Revisión de Literatura", lit_content),
+        _sec("hipotesis", "🔬 Hipótesis", hip_html),
+        _sec("dataset", "📊 Descripción del Dataset", dataset_content),
+        _sec("descargas", "⬇ Descargar Datos", descargas_content),
+        _sec("perfil", "📐 Perfil de Columnas", _build_profile_table(state.get('perfil_columnas', {}))),
+        _sec("preprocesamiento", "⚙ Preprocesamiento", prepro_content),
+    ])
+
+    if is_classification:
+        sections_html += "\n" + _sec("muestreo", "🔄 Variantes de Muestreo", muestreo_content)
+
+    sections_html += "\n".join([
+        "",
+        _sec("hallazgos", "🔍 Hallazgos EDA", hallazgos_content),
+        _sec("normalidad", "📈 Test de Normalidad", normalidad_content),
+        _sec("vif", "🔗 VIF — Multicolinealidad", vif_content),
+    ])
+
+    if is_regression:
+        sections_html += "\n" + _sec("breusch_pagan", "📉 Breusch-Pagan", bp_content)
+
+    sections_html += "\n" + _sec("importancia", "⭐ Feature Importance", fi_content)
+
+    if state.get('flag_timeseries'):
+        sections_html += "\n" + _sec("timeseries", "⏰ Series de Tiempo", ts_html)
+
+    sections_html += "\n".join([
+        "",
+        _sec("decision", "🎯 Decisión de Tarea", decision_content),
+        _sec("modelos", "🤖 Modelos Recomendados", modelos_content),
+        _sec("figuras", "🖼 Visualizaciones", figuras_content),
+        _sec("advertencias", "⚠ Advertencias y Limitaciones", warns_html),
+        _sec("pasos", "👣 Próximos Pasos", pasos_content),
+        _sec("agentes", "🔧 Estado de Agentes", f'<p>{status_html}</p>'),
+    ])
 
     html = f"""<!DOCTYPE html>
 <html lang="es">
@@ -848,6 +1333,7 @@ def build_html_report(state: dict[str, Any], output_dir: str | Path) -> Path:
 <style>{_CSS}</style>
 </head>
 <body>
+<div class="scroll-progress" id="scrollProgress"></div>
 
 <nav class="sidebar">
 <h2>EDA Agents</h2>
@@ -856,140 +1342,24 @@ def build_html_report(state: dict[str, Any], output_dir: str | Path) -> Path:
 </nav>
 
 <div class="main">
-
 <div class="header">
 <h1>Reporte EDA - {run_id}</h1>
-<button class="theme-toggle" onclick="toggleTheme()">Tema claro/oscuro</button>
+<button class="theme-toggle" onclick="toggleTheme()">🌓 Tema</button>
 </div>
 
-<section id="resumen">
-<h2>Resumen Ejecutivo</h2>
-<p><strong>Pregunta:</strong> {question}</p>
-<div class="kpi-row">
-<div class="kpi"><div class="value">{dataset_size}</div><div class="label">Filas</div></div>
-<div class="kpi"><div class="value">{n_features}</div><div class="label">Columnas</div></div>
-<div class="kpi"><div class="value">{tarea}</div><div class="label">Tarea</div></div>
-<div class="kpi"><div class="value">{model_family}</div><div class="label">Familia</div></div>
-<div class="kpi"><div class="value">{metrica}</div><div class="label">Metrica</div></div>
-<div class="kpi"><div class="value">{n_figures}</div><div class="label">Figuras</div></div>
-</div>
-<p><strong>Tipo de datos:</strong> {data_type} | <strong>Target:</strong> {target} | <strong>Desbalance:</strong> {desbalance_str}</p>
-</section>
-
-<section id="literatura">
-<h2>Revision de Literatura</h2>
-<h3>Ecuaciones PICO</h3>
-<ul>{"".join(f"<li><code>{eq}</code></li>" for eq in state.get('search_equations', []))}</ul>
-<h3>Referencias</h3>
-{refs_html}
-</section>
-
-<section id="hipotesis">
-<h2>Hipotesis</h2>
-{hip_html}
-</section>
-
-<section id="dataset">
-<h2>Descripcion del Dataset</h2>
-{_build_json_table({"Filas": dataset_size, "Target": target, "Tipo": data_type,
-                     "Desbalance": desbalance_str, "Serie temporal": state.get('flag_timeseries', False)})}
-</section>
-
-<section id="descargas">
-<h2>Descargar Datasets</h2>
-<p>Datasets listos para modelamiento (con encoding y preprocesamiento aplicados):</p>
-{_build_download_buttons(state, output_dir)}
-</section>
-
-<section id="perfil">
-<h2>Perfil de Columnas</h2>
-{_build_profile_table(state.get('perfil_columnas', {}))}
-</section>
-
-<section id="preprocesamiento">
-<h2>Preprocesamiento</h2>
-<h3>Encoding</h3>
-{_build_encoding_table(state.get('encoding_log', {}))}
-<h3>Features nuevas</h3>
-<p>{state.get('features_nuevas', []) or 'Ninguna'}</p>
-<h3>Balanceo</h3>
-<pre>{json.dumps(state.get('balanceo_log', {}), indent=2, ensure_ascii=False)}</pre>
-</section>
-
-<section id="hallazgos">
-<h2>Hallazgos EDA Tabular</h2>
-{_build_hallazgos_html(hallazgos)}
-</section>
-
-<section id="normalidad">
-<h2>Test de Normalidad</h2>
-<p>Evaluacion de la distribucion normal de variables numericas (Shapiro-Wilk / Anderson-Darling, α = 0.05).</p>
-{_build_normality_html(hallazgos)}
-</section>
-
-<section id="vif">
-<h2>VIF — Factor de Inflacion de Varianza</h2>
-<p>Analisis de multicolinealidad mediante VIF. Valores &gt; 10 indican multicolinealidad severa.</p>
-{_build_vif_html(vif_all, vif_flags)}
-</section>
-
-<section id="breusch_pagan">
-<h2>Test de Breusch-Pagan — Heteroscedasticidad</h2>
-<p>Evalua si la varianza de los residuos es constante (homoscedasticidad) en el modelo de regresion.</p>
-{_build_bp_html(bp_result, correccion)}
-</section>
-
-<section id="importancia">
-<h2>Feature Importance</h2>
-{_build_feature_importance_html(state.get('feature_importance', {}))}
-</section>
-
-<section id="timeseries">
-<h2>Series de Tiempo</h2>
-{ts_html}
-</section>
-
-<section id="decision">
-<h2>Decision de Tarea</h2>
-{_build_json_table({"Tarea": tarea, "Model family": model_family,
-                     "Tecnica hiperparametros": hyper, "Metrica principal": metrica})}
-</section>
-
-<section id="modelos">
-<h2>Modelos Recomendados</h2>
-{_build_models_table(state.get('modelos_recomendados', []))}
-</section>
-
-<section id="figuras">
-<h2>Visualizaciones</h2>
-<div>{_build_figures_html(figures, output_dir)}</div>
-</section>
-
-<section id="advertencias">
-<h2>Advertencias y Limitaciones</h2>
-{warns_html}
-</section>
-
-<section id="pasos">
-<h2>Proximos Pasos</h2>
-<ol>
-<li>Entrenar modelos recomendados con los hiperparametros sugeridos</li>
-<li>Validar con cross-validation sobre train set</li>
-<li>Evaluar en test set con metricas seleccionadas</li>
-<li>Iterar segun resultados</li>
-</ol>
-</section>
-
-<section id="agentes">
-<h2>Estado de Agentes</h2>
-<p>{status_html}</p>
-</section>
+{sections_html}
 
 </div>
 
-<div class="modal" id="imgModal" onclick="closeModal()">
-<img id="modalImg" src="" alt="Zoom">
+<div class="lightbox" id="lightbox">
+<button class="lb-close" onclick="closeLightbox()">&times;</button>
+<button class="lb-nav lb-prev" onclick="lbNav(-1)">&#10094;</button>
+<button class="lb-nav lb-next" onclick="lbNav(1)">&#10095;</button>
+<img id="lbImg" src="" alt="">
+<p class="lb-caption" id="lbCaption"></p>
+<p class="lb-counter" id="lbCounter"></p>
 </div>
+<div class="toast" id="toast"></div>
 
 <script>{_JS}</script>
 </body>

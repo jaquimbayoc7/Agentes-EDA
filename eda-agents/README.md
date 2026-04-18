@@ -66,7 +66,7 @@ flowchart TD
 ### Flujo del Pipeline
 
 1. **Fase 1 (paralelo):** `Research Lead` formula hipótesis y busca literatura mientras `Data Steward` perfila el dataset y hace train/test split.
-2. **Fase 2:** `Data Engineer` aplica encoding provisional y feature engineering.
+2. **Fase 2:** `Data Engineer` aplica encoding provisional, **resampling multiclass** (3 variantes: oversample/undersample/hybrid sobre todas las clases, selección automática por score) y feature engineering.
 3. **Fase 3 (paralelo condicional):** `Statistician` ejecuta EDA tabular (correlaciones, VIF, Breusch-Pagan). Si `flag_timeseries=True`, `TS Analyst` corre en paralelo (ADF, KPSS, ARIMA). Luego `Refine Equations` mejora las ecuaciones PICO con los hallazgos.
 4. **Fase 4:** `ML Strategist` recomienda modelos y `Re-Encoder` re-aplica encoding final según `model_family` (linear→Frequency, tree→Label).
 5. **Fase 5:** `Viz Designer` genera 11+ figuras interactivas y `Technical Writer` produce el informe final, reporte HTML dinámico y notebook Jupyter reproducible.
@@ -78,12 +78,12 @@ flowchart TD
 | 1 | **Research Lead** | Genera ecuaciones PICO, busca literatura con Claude, formula 3 hipótesis (confirmatoria, exploratoria, alternativa), infiere tipo de tarea |
 | 1b | **Refine Equations** | Refina ecuaciones de búsqueda PICO usando los hallazgos estadísticos del Statistician |
 | 2 | **Data Steward** | Perfila columnas, detecta tipos, calcula nulos/cardinalidad, hace train/test split, detecta desbalance y series temporales |
-| 3 | **Data Engineer** | Aplica encoding (OHE/Label/Ordinal), resampling para desbalance, feature engineering, genera datasets provisionales |
+| 3 | **Data Engineer** | Aplica encoding (OHE/Label/Ordinal), resampling multiclass (oversample/undersample/hybrid sobre TODAS las clases), feature engineering, genera datasets provisionales |
 | 4 | **Statistician** | EDA tabular: correlaciones, test de Breusch-Pagan, VIF completo, medianas, distribución del target |
 | 5 | **TS Analyst** | Análisis de series de tiempo: estacionariedad (ADF/KPSS), detección de cambios, ARIMA/SARIMA/SARIMAX/VAR (solo si flag_timeseries=True) |
 | 6 | **ML Strategist** | Recomienda modelos, hiperparámetros, técnica de búsqueda, métrica principal, define model_family (linear/tree) |
 | — | **Re-Encoder** | Nodo Python puro: re-aplica encoding final según model_family (linear→Frequency, tree→Label) |
-| 7 | **Viz Designer** | Genera 11+ figuras interactivas Plotly: correlaciones, distribuciones multi-fila, boxplots, pairplot, target, VIF (barras color-código), Q-Q normalidad, residuales Breusch-Pagan |
+| 7 | **Viz Designer** | Genera 11+ figuras interactivas Plotly con exportación kaleido estable (single-process Chromium): correlaciones, distribuciones multi-fila, boxplots, pairplot, target, VIF (barras color-código), Q-Q normalidad, residuales Breusch-Pagan |
 | 8 | **Technical Writer** | Produce informe `report.md`, reporte HTML dinámico con navegación lateral y tema claro/oscuro, y notebook Jupyter con código 100% ejecutable |
 
 ## Stack Tecnologico
@@ -260,17 +260,22 @@ outputs/<run_id>/
 ### Reporte HTML Dinámico
 
 Se genera automáticamente una página HTML auto-contenida en `reportesFinales/` con:
-- Navegación lateral por secciones (hipótesis, datos, estadísticas, modelos, figuras, hallazgos, referencias, descargas)
-- Figuras embebidas (base64) con exportación a **400 DPI** por figura
-- Tablas ordenables y KPIs visuales con íconos
+- **Secciones colapsables** con animación chevron (click para expandir/colapsar)
+- **Barra de progreso** de scroll en la parte superior
+- Navegación lateral por secciones con íconos emoji
+- Figuras embebidas (base64) en **grid responsivo** con **lightbox** (navegación ←→, teclado, contador)
+- Exportación a **400 DPI** por figura + **descarga ZIP** de todas las figuras
+- Tablas ordenables y KPIs visuales con gradiente de acento
 - Tema claro/oscuro
 - Sección de **Normalidad** con tabla de resultados por variable
 - Sección de **VIF** con tabla color-código (rojo >10, naranja 5-10, verde <5)
 - Sección de **Breusch-Pagan** con resultado de heterocedasticidad
-- **Hallazgos EDA** organizados en tarjetas con KPIs resumen (vars normales, outliers, VIF alto, top features)
-- **Referencias** con tarjetas ricas: DOI con enlace clickeable, URL del artículo, fuente (Web/Académico), hallazgo clave
+- **Hallazgos EDA** organizados en **4 tabs** (Resumen/Correlaciones/Outliers/Top Features) con KPIs resumen
+- **Referencias** en **tabla buscable/ordenable** con toolbar de exportación a **Excel (SheetJS)** y **CSV**
 - Botones de descarga (CSV, JSON, notebook)
-- Modal para zoom de imágenes
+- **Notificaciones toast** para feedback de acciones
+- **Print-friendly**: oculta UI interactiva y expande secciones al imprimir
+- CDN on-demand: SheetJS y JSZip se cargan solo cuando el usuario exporta
 
 ### Notebook Reproducible (Código Ejecutable)
 
@@ -289,6 +294,8 @@ Se genera automáticamente un notebook Jupyter en `notebooksFinales/` con **cód
 | **9. Modelado** | `GridSearchCV` con el modelo recomendado, evaluación en test |
 
 Del state del pipeline solo se usa **configuración** (dataset_path, target, seed, encoding recipe, modelos recomendados) — los resultados se computan desde cero para que el investigador pueda verificar cada paso.
+
+Cada celda markdown incluye **comentarios técnicos enriquecidos**: marco CRISP-DM, explicación de data leakage, comparación de técnicas de encoding, tabla comparativa oversample/undersample/hybrid, fórmula IQR para outliers, criterios Shapiro-Wilk/Anderson-Darling, umbrales VIF, hipótesis Breusch-Pagan, y conexión explícita con las hipótesis H1/H2/H3 de la investigación.
 
 ### Ejemplo de `decision.json`
 
@@ -365,7 +372,7 @@ pytest tests/ --cov=src --cov-report=term-missing
 pytest tests/test_agents.py -v
 ```
 
-**194 tests** cubren agentes, skills, grafo, estado, validación, HTML report, notebook builder (código ejecutable), sanitización numpy y pipeline end-to-end.
+**197 tests** cubren agentes, skills, grafo, estado, validación, HTML report, notebook builder (código ejecutable), sanitización numpy y pipeline end-to-end.
 
 ## Convenciones del Proyecto
 

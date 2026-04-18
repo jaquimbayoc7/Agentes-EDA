@@ -6,11 +6,14 @@ Responsabilidad: Generar figuras Plotly interactivas (HTML) + PNG estáticos.
 
 from __future__ import annotations
 
+import atexit
+import os
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+import plotly.io as pio
 import structlog
 
 from src.state import EDAState
@@ -20,13 +23,40 @@ from src.utils.state_validator import validate_ag7_output
 logger = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
+# Kaleido fix — single Chromium process, generous timeout, atexit cleanup
+# ---------------------------------------------------------------------------
+os.environ.setdefault("KALEIDO_DISABLE_CHROMIUM_SANDBOX", "true")
+os.environ.setdefault("CHROMIUM_FLAGS", "--single-process --disable-gpu")
+
+_KALEIDO_OK = False
+try:
+    import kaleido  # noqa: F401
+    pio.kaleido.scope.default_timeout = 120
+    _KALEIDO_OK = True
+except (ImportError, AttributeError):
+    pass
+
+
+def _cleanup_kaleido():
+    """Shut down the shared Chromium process at interpreter exit."""
+    try:
+        if _KALEIDO_OK:
+            pio.kaleido.scope._shutdown_kaleido()
+    except Exception:
+        pass
+
+
+atexit.register(_cleanup_kaleido)
+
+# ---------------------------------------------------------------------------
 # Helpers Plotly
 # ---------------------------------------------------------------------------
 
 def _save_plotly_fig(fig: Any, output_dir: Path, name: str, description: str) -> list[dict]:
     """Guarda figura Plotly como HTML interactivo + PNG estático.
 
-    Returns list of figure metadata dicts.
+    Uses the global kaleido scope (single Chromium process) with
+    retry logic to avoid 'Resorting to unclean kill browser' on Windows.
     """
     entries: list[dict] = []
     html_path = str(output_dir / f"{name}.html")
@@ -39,18 +69,30 @@ def _save_plotly_fig(fig: Any, output_dir: Path, name: str, description: str) ->
         "format": "html",
     })
 
-    try:
-        png_path = str(output_dir / f"{name}.png")
-        fig.write_image(png_path, width=900, height=600, scale=2)
-        entries.append({
-            "name": f"{name}.png",
-            "path": png_path,
-            "description": description,
-            "agent": "ag7",
-            "format": "png",
-        })
-    except Exception:
-        pass  # kaleido may not be available
+    if not _KALEIDO_OK:
+        return entries
+
+    png_path = str(output_dir / f"{name}.png")
+    for attempt in range(2):
+        try:
+            fig.write_image(png_path, width=900, height=600, scale=2, engine="kaleido")
+            entries.append({
+                "name": f"{name}.png",
+                "path": png_path,
+                "description": description,
+                "agent": "ag7",
+                "format": "png",
+            })
+            break
+        except Exception as exc:
+            if attempt == 0:
+                logger.debug("png_export_retry", name=name, error=str(exc))
+                try:
+                    pio.kaleido.scope._shutdown_kaleido()
+                except Exception:
+                    pass
+            else:
+                logger.debug("png_export_skipped", name=name, error=str(exc))
 
     return entries
 
@@ -334,9 +376,9 @@ def viz_designer(state: EDAState) -> dict[str, Any]:
             except Exception as qq_err:
                 log.warning("qq_plots_failed", error=str(qq_err))
 
-        # 11. Heteroscedasticity — Residual scatter (Breusch-Pagan)
+        # 11. Heteroscedasticity — Residual scatter (Breusch-Pagan) — SOLO regresión
         bp_result = state.get("breusch_pagan_result")
-        if bp_result and not bp_result.get("error") and target and target in df.columns:
+        if tarea == "regression" and bp_result and not bp_result.get("error") and target and target in df.columns:
             try:
                 import statsmodels.api as sm
 
@@ -372,6 +414,108 @@ def viz_designer(state: EDAState) -> dict[str, Any]:
                     ))
             except Exception as bp_err:
                 log.warning("heteroscedasticity_plot_failed", error=str(bp_err))
+
+        # 12. Comparación de variantes de muestreo (SOLO clasificación)
+        sampling_variants = state.get("sampling_variants", {})
+        if tarea == "classification" and sampling_variants and target:
+            try:
+                # 12a. Barras agrupadas: distribución de clases por variante
+                variant_names = []
+                class_data: dict[str, list] = {}
+
+                # Original
+                if target in df.columns:
+                    orig_counts = df[target].value_counts()
+                    variant_names.append("Original")
+                    for cls in orig_counts.index:
+                        class_data.setdefault(str(cls), []).append(int(orig_counts[cls]))
+
+                for method in ["oversample", "hybrid", "undersample"]:
+                    info = sampling_variants.get(method, {})
+                    dist = info.get("class_distribution", {})
+                    if dist and not info.get("error"):
+                        variant_names.append(method.capitalize())
+                        for cls in orig_counts.index:
+                            class_data.setdefault(str(cls), []).append(int(dist.get(str(cls), 0)))
+
+                if len(variant_names) > 1:
+                    fig_samp = go.Figure()
+                    colors = ["#3498db", "#e74c3c", "#2ecc71", "#f39c12", "#9b59b6", "#1abc9c", "#e67e22", "#34495e"]
+                    for i, (cls, counts_list) in enumerate(class_data.items()):
+                        fig_samp.add_trace(go.Bar(
+                            name=f"Clase {cls}",
+                            x=variant_names,
+                            y=counts_list,
+                            marker_color=colors[i % len(colors)],
+                        ))
+
+                    # Marcar la variante seleccionada
+                    selected = None
+                    for m, v in sampling_variants.items():
+                        if v.get("selected"):
+                            selected = m.capitalize()
+
+                    title = "Comparación de Estrategias de Muestreo"
+                    if selected:
+                        title += f" (Seleccionado: {selected})"
+
+                    fig_samp.update_layout(
+                        title=title,
+                        barmode="group",
+                        xaxis_title="Variante de muestreo",
+                        yaxis_title="Número de muestras",
+                        template="plotly_white",
+                        height=500,
+                    )
+                    figures.extend(_save_plotly_fig(
+                        fig_samp, output_dir, "sampling_comparison",
+                        "Comparación de estrategias de muestreo (oversample, undersample, hybrid)"
+                    ))
+
+                # 12b. Ratio de desbalance por variante
+                balanceo_log = state.get("balanceo_log", {})
+                ratio_data = {"Original": balanceo_log.get("ratio_before", 1.0)}
+                for method in ["oversample", "hybrid", "undersample"]:
+                    info = sampling_variants.get(method, {})
+                    if not info.get("error") and "ratio_after" in info:
+                        ratio_data[method.capitalize()] = info["ratio_after"]
+
+                if len(ratio_data) > 1:
+                    methods = list(ratio_data.keys())
+                    ratios = list(ratio_data.values())
+                    bar_colors = []
+                    for m in methods:
+                        if selected and m == selected:
+                            bar_colors.append("#2ecc71")  # verde para seleccionado
+                        elif m == "Original":
+                            bar_colors.append("#95a5a6")  # gris para original
+                        else:
+                            bar_colors.append("#3498db")  # azul para alternativas
+
+                    fig_ratio = go.Figure(go.Bar(
+                        x=methods, y=ratios,
+                        marker_color=bar_colors,
+                        text=[f"{r:.2f}" for r in ratios],
+                        textposition="auto",
+                    ))
+                    fig_ratio.add_hline(
+                        y=1.0, line_dash="dash", line_color="green",
+                        annotation_text="Balance perfecto (1.0)",
+                    )
+                    fig_ratio.update_layout(
+                        title="Ratio de Desbalance por Variante de Muestreo",
+                        xaxis_title="Variante",
+                        yaxis_title="Ratio (max/min clase)",
+                        template="plotly_white",
+                        height=450,
+                    )
+                    figures.extend(_save_plotly_fig(
+                        fig_ratio, output_dir, "sampling_ratio",
+                        "Ratio de desbalance por variante de muestreo"
+                    ))
+
+            except Exception as samp_err:
+                log.warning("sampling_comparison_failed", error=str(samp_err))
 
         log.info("figures_generated", n_figures=len(figures))
 

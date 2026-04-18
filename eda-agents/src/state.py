@@ -76,6 +76,7 @@ class EDAState(TypedDict):
     encoding_log: dict
     features_nuevas: list
     balanceo_log: dict
+    sampling_variants: dict  # {oversample: {path, ratio_after, ...}, undersample: ..., hybrid: ...}
     dataset_train_provisional: str
     dataset_test_procesado: str
     dataset_train_final: str

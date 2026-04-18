@@ -66,9 +66,17 @@ def data_engineer(state: EDAState) -> dict[str, Any]:
         )
         log.info("encoding_done", n_encoded=len(encoding_log))
 
-        # --- Resample (solo train) ---
+        # --- Resample (solo train, clasificación: ejecutar las 3 variantes) ---
         desbalance_ratio = state.get("desbalance_ratio")
-        if desbalance_ratio is not None and target and target in df_train.columns:
+        tarea = state.get("tarea_sugerida") or state.get("task_override") or "classification"
+        sampling_variants: dict[str, Any] = {}
+
+        if desbalance_ratio is not None and target and target in df_train.columns and tarea == "classification":
+            df_train, balanceo_log, sampling_variants = _resample_all_variants(
+                df_train, target, desbalance_ratio, config, run_id
+            )
+            log.info("resampling_done", log=balanceo_log)
+        elif desbalance_ratio is not None and target and target in df_train.columns:
             df_train, balanceo_log = _resample(
                 df_train, target, desbalance_ratio, config
             )
@@ -98,6 +106,7 @@ def data_engineer(state: EDAState) -> dict[str, Any]:
             "encoding_log": encoding_log,
             "features_nuevas": features_nuevas,
             "balanceo_log": balanceo_log,
+            "sampling_variants": sampling_variants,
             "dataset_train_provisional": train_prov_path,
             "dataset_test_procesado": test_proc_path,
             "agent_status": {**state.get("agent_status", {}), "ag3": "ok"},
@@ -113,6 +122,7 @@ def data_engineer(state: EDAState) -> dict[str, Any]:
             "encoding_log": {},
             "features_nuevas": [],
             "balanceo_log": {},
+            "sampling_variants": {},
             "dataset_train_provisional": "",
             "dataset_test_procesado": "",
             "agent_status": {**state.get("agent_status", {}), "ag3": "error"},
@@ -163,58 +173,69 @@ def _resample(
     ratio: float,
     config: PipelineConfig,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Resample según umbrales de desbalanceo. SOLO sobre train."""
+    """Resample según umbrales de desbalanceo. SOLO sobre train.
+
+    Multiclass-aware: opera sobre TODAS las clases.
+    """
     thresholds = config.imbalance_thresholds
     balanceo_log: dict[str, Any] = {"ratio_before": ratio}
+    seed = config.random_seed
 
     counts = df_train[target].value_counts()
-    minority_class = counts.idxmin()
-    majority_class = counts.idxmax()
-    n_minority = counts.min()
-    n_majority = counts.max()
+    n_minority = int(counts.min())
+    n_majority = int(counts.max())
+    median_count = int(np.median(counts.values))
 
     if ratio < thresholds.oversample:
         balanceo_log["method"] = "none"
         balanceo_log["applied"] = False
     elif ratio < thresholds.hybrid:
-        # Oversample minority
-        minority_df = df_train[df_train[target] == minority_class]
-        oversampled = minority_df.sample(
-            n=n_majority // 2,
-            replace=True,
-            random_state=config.random_seed,
-        )
-        df_train = pd.concat([df_train, oversampled], ignore_index=True)
+        # Oversample: todas las clases suben al nivel de la mayoritaria
+        parts = []
+        for cls, cnt in counts.items():
+            cls_df = df_train[df_train[target] == cls]
+            if cnt < n_majority:
+                extra = cls_df.sample(
+                    n=n_majority - cnt, replace=True, random_state=seed,
+                )
+                parts.append(pd.concat([cls_df, extra], ignore_index=True))
+            else:
+                parts.append(cls_df)
+        df_train = pd.concat(parts, ignore_index=True)
         balanceo_log["method"] = "oversample"
         balanceo_log["applied"] = True
     elif ratio < thresholds.undersample:
-        # Hybrid
-        majority_df = df_train[df_train[target] == majority_class]
-        minority_df = df_train[df_train[target] == minority_class]
-        others = df_train[~df_train[target].isin([minority_class, majority_class])]
-        undersampled = majority_df.sample(
-            n=int(n_majority * 0.7),
-            replace=False,
-            random_state=config.random_seed,
-        )
-        oversampled = minority_df.sample(
-            n=n_minority * 2,
-            replace=True,
-            random_state=config.random_seed,
-        )
-        df_train = pd.concat([undersampled, oversampled, others], ignore_index=True)
+        # Hybrid: target = mediana; sube inferiores, baja superiores
+        target_n = max(median_count, n_minority + 1)
+        parts = []
+        for cls, cnt in counts.items():
+            cls_df = df_train[df_train[target] == cls]
+            if cnt < target_n:
+                extra = cls_df.sample(
+                    n=target_n - cnt, replace=True, random_state=seed,
+                )
+                parts.append(pd.concat([cls_df, extra], ignore_index=True))
+            elif cnt > target_n:
+                parts.append(cls_df.sample(
+                    n=target_n, replace=False, random_state=seed,
+                ))
+            else:
+                parts.append(cls_df)
+        df_train = pd.concat(parts, ignore_index=True)
         balanceo_log["method"] = "hybrid"
         balanceo_log["applied"] = True
     else:
-        # Undersample majority
-        majority_df = df_train[df_train[target] == majority_class]
-        others = df_train[df_train[target] != majority_class]
-        undersampled = majority_df.sample(
-            n=n_minority * 3,
-            replace=False,
-            random_state=config.random_seed,
-        )
-        df_train = pd.concat([undersampled, others], ignore_index=True)
+        # Undersample: todas las clases bajan al nivel de la minoritaria
+        parts = []
+        for cls, cnt in counts.items():
+            cls_df = df_train[df_train[target] == cls]
+            if cnt > n_minority:
+                parts.append(cls_df.sample(
+                    n=n_minority, replace=False, random_state=seed,
+                ))
+            else:
+                parts.append(cls_df)
+        df_train = pd.concat(parts, ignore_index=True)
         balanceo_log["method"] = "undersample"
         balanceo_log["applied"] = True
 
@@ -222,6 +243,204 @@ def _resample(
         df_train[target].value_counts().max() / df_train[target].value_counts().min()
     )
     return df_train, balanceo_log
+
+
+def _resample_all_variants(
+    df_train: pd.DataFrame,
+    target: str,
+    ratio: float,
+    config: PipelineConfig,
+    run_id: str,
+) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]]:
+    """Genera las 3 variantes de muestreo (oversample, undersample, hybrid),
+    las guarda como CSVs y selecciona la mejor con justificación.
+
+    Multiclass-aware: opera sobre TODAS las clases, no solo la
+    mayoritaria/minoritaria.
+
+    - Oversample: sube todas las clases al nivel de la más grande.
+    - Undersample: baja todas las clases al nivel de la más pequeña.
+    - Hybrid: lleva todas las clases al conteo mediano (sube las
+      que están por debajo, baja las que están por encima).
+
+    Solo se aplica en clasificación. Retorna el df_train con la variante
+    elegida, el balanceo_log y el dict de sampling_variants.
+    """
+    seed = config.random_seed
+    counts = df_train[target].value_counts()
+    minority_class = counts.idxmin()
+    majority_class = counts.idxmax()
+    n_minority = int(counts.min())
+    n_majority = int(counts.max())
+    median_count = int(np.median(counts.values))
+
+    output_dir = Path("outputs") / run_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    variants: dict[str, Any] = {}
+
+    # ---- 1. OVERSAMPLE — todas las clases suben al nivel de la mayoritaria ----
+    try:
+        parts = []
+        for cls, cnt in counts.items():
+            cls_df = df_train[df_train[target] == cls]
+            if cnt < n_majority:
+                extra = cls_df.sample(
+                    n=n_majority - cnt, replace=True, random_state=seed,
+                )
+                parts.append(pd.concat([cls_df, extra], ignore_index=True))
+            else:
+                parts.append(cls_df)
+        df_over = pd.concat(parts, ignore_index=True)
+        over_path = str(output_dir / "train_oversample.csv")
+        df_over.to_csv(over_path, index=False)
+        over_counts = df_over[target].value_counts()
+        variants["oversample"] = {
+            "path": over_path,
+            "n_rows": len(df_over),
+            "ratio_after": float(over_counts.max() / over_counts.min()),
+            "class_distribution": {str(k): int(v) for k, v in over_counts.items()},
+            "description": (
+                f"Sobremuestreo de TODAS las clases al nivel de la mayoritaria "
+                f"({majority_class}: {n_majority})"
+            ),
+        }
+    except Exception:
+        variants["oversample"] = {"path": "", "error": "failed"}
+
+    # ---- 2. UNDERSAMPLE — todas las clases bajan al nivel de la minoritaria ----
+    try:
+        parts = []
+        for cls, cnt in counts.items():
+            cls_df = df_train[df_train[target] == cls]
+            if cnt > n_minority:
+                parts.append(cls_df.sample(
+                    n=n_minority, replace=False, random_state=seed,
+                ))
+            else:
+                parts.append(cls_df)
+        df_under = pd.concat(parts, ignore_index=True)
+        under_path = str(output_dir / "train_undersample.csv")
+        df_under.to_csv(under_path, index=False)
+        under_counts = df_under[target].value_counts()
+        variants["undersample"] = {
+            "path": under_path,
+            "n_rows": len(df_under),
+            "ratio_after": float(under_counts.max() / under_counts.min()),
+            "class_distribution": {str(k): int(v) for k, v in under_counts.items()},
+            "description": (
+                f"Submuestreo de TODAS las clases al nivel de la minoritaria "
+                f"({minority_class}: {n_minority})"
+            ),
+        }
+    except Exception:
+        variants["undersample"] = {"path": "", "error": "failed"}
+
+    # ---- 3. HYBRID — target = mediana; sube las inferiores, baja las superiores ----
+    try:
+        target_n = max(median_count, n_minority + 1)
+        parts = []
+        for cls, cnt in counts.items():
+            cls_df = df_train[df_train[target] == cls]
+            if cnt < target_n:
+                extra = cls_df.sample(
+                    n=target_n - cnt, replace=True, random_state=seed,
+                )
+                parts.append(pd.concat([cls_df, extra], ignore_index=True))
+            elif cnt > target_n:
+                parts.append(cls_df.sample(
+                    n=target_n, replace=False, random_state=seed,
+                ))
+            else:
+                parts.append(cls_df)
+        df_hybrid = pd.concat(parts, ignore_index=True)
+        hybrid_path = str(output_dir / "train_hybrid.csv")
+        df_hybrid.to_csv(hybrid_path, index=False)
+        hybrid_counts = df_hybrid[target].value_counts()
+        variants["hybrid"] = {
+            "path": hybrid_path,
+            "n_rows": len(df_hybrid),
+            "ratio_after": float(hybrid_counts.max() / hybrid_counts.min()),
+            "class_distribution": {str(k): int(v) for k, v in hybrid_counts.items()},
+            "description": (
+                f"Híbrido: todas las clases al conteo mediano ({target_n}). "
+                f"Submuestreo de clases grandes + sobremuestreo de clases pequeñas"
+            ),
+        }
+    except Exception:
+        variants["hybrid"] = {"path": "", "error": "failed"}
+
+    # ---- Selección de la mejor variante ----
+    best_method = "oversample"
+    best_score = float("inf")
+
+    for method, info in variants.items():
+        if info.get("error"):
+            continue
+        r = info["ratio_after"]
+        n = info["n_rows"]
+        data_loss_penalty = max(0, (len(df_train) - n) / len(df_train)) * 0.5
+        score = abs(r - 1.0) + data_loss_penalty
+        if score < best_score:
+            best_score = score
+            best_method = method
+
+    # Justificación de la selección
+    def _fmt_dist(m: str) -> str:
+        d = variants.get(m, {}).get("class_distribution", {})
+        return ", ".join(f"{k}: {v}" for k, v in sorted(d.items()))
+
+    reasons = {
+        "oversample": (
+            f"Sobremuestreo seleccionado: todas las clases elevadas a {n_majority} filas. "
+            f"Ratio original {ratio:.2f} → {variants.get('oversample', {}).get('ratio_after', ratio):.2f}. "
+            f"Distribución resultante: {_fmt_dist('oversample')}. "
+            f"No pierde datos originales; ideal cuando el dataset es pequeño."
+        ),
+        "undersample": (
+            f"Submuestreo seleccionado: todas las clases reducidas a {n_minority} filas. "
+            f"Ratio original {ratio:.2f} → {variants.get('undersample', {}).get('ratio_after', ratio):.2f}. "
+            f"Distribución resultante: {_fmt_dist('undersample')}. "
+            f"Balance perfecto a costa de perder datos de clases grandes."
+        ),
+        "hybrid": (
+            f"Método híbrido seleccionado: todas las clases llevadas al conteo mediano ({median_count}). "
+            f"Ratio original {ratio:.2f} → {variants.get('hybrid', {}).get('ratio_after', ratio):.2f}. "
+            f"Distribución resultante: {_fmt_dist('hybrid')}. "
+            f"Balancea pérdida de información con representación equitativa."
+        ),
+    }
+
+    # Marcar la variante elegida
+    for method in variants:
+        if not variants[method].get("error"):
+            variants[method]["selected"] = (method == best_method)
+
+    # Aplicar la variante elegida al df_train
+    chosen_info = variants.get(best_method, {})
+    chosen_path = chosen_info.get("path", "")
+    if chosen_path and Path(chosen_path).exists():
+        df_train = pd.read_csv(chosen_path)
+
+    balanceo_log: dict[str, Any] = {
+        "ratio_before": ratio,
+        "method": best_method,
+        "applied": True,
+        "reason": reasons.get(best_method, ""),
+        "ratio_after": chosen_info.get("ratio_after", ratio),
+        "all_variants_computed": True,
+        "variants_summary": {
+            m: {
+                "ratio_after": v.get("ratio_after", "N/A"),
+                "n_rows": v.get("n_rows", "N/A"),
+                "class_distribution": v.get("class_distribution", {}),
+            }
+            for m, v in variants.items()
+            if not v.get("error")
+        },
+    }
+
+    return df_train, balanceo_log, variants
 
 
 def _feature_engineering(
